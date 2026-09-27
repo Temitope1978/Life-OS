@@ -74,7 +74,7 @@ AI does not get unrestricted execution. High-impact actions require confirmation
 
 This repository currently holds the product bible (master build specification):
 
-- `New folder/LIFE OS PROJECT.md`
+- `LIFE OS folder/LIFE OS PROJECT.md`
 
 Use that specification as the source of truth for product principles, MVP scope, architecture, data model, and roadmap.
 
