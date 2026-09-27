@@ -6,14 +6,14 @@
 <title>AI Life OS — Design System Preview</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Libre+Baskerville:ital@0;1&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     /* Brand */
-    --primary:        #14506b;
-    --primary-strong: #0e3b50;
-    --primary-soft:   #e2eef3;
-    --primary-ink:    #0a2633;
+    --primary:        #5b21b6;
+    --primary-strong: #4c1d95;
+    --primary-soft:   #ede9fe;
+    --primary-ink:    #2e1065;
 
     /* Neutrals — warm, calm gray */
     --bg:        #fafaf8;
@@ -32,11 +32,11 @@
     --warning-soft: #f5ead8;
     --danger:   #b4342e;
     --danger-soft: #f6e3e1;
-    --focus:    #2f7ea6;
+    --focus:    #7c3aed;
 
     /* Type */
     --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    --serif: 'Libre Baskerville', Georgia, 'Times New Roman', serif;
+    --display: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 
     --radius: 10px;
     --radius-sm: 7px;
@@ -57,8 +57,8 @@
 
   /* ---------- Layout ---------- */
   header.hero {
-    background: linear-gradient(135deg, #0c3144 0%, var(--primary) 60%, #1b5e7a 100%);
-    color: #f0f7fa;
+    background: linear-gradient(135deg, #2e1065 0%, var(--primary) 60%, #7c3aed 100%);
+    color: #f5f0fc;
     padding: 64px 24px 72px;
     text-align: center;
   }
@@ -66,19 +66,20 @@
     font-size: 12px;
     letter-spacing: .22em;
     text-transform: uppercase;
-    color: #9dc7d8;
+    color: #c4b5fd;
     margin-bottom: 12px;
   }
   header.hero h1 {
-    font-family: var(--serif);
-    font-weight: 400;
-    font-size: clamp(26px, 4vw, 40px);
-    line-height: 1.2;
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(28px, 4.2vw, 44px);
+    line-height: 1.12;
+    letter-spacing: -0.4px;
   }
   header.hero p {
     margin-top: 14px;
     font-size: 15px;
-    color: #cddde4;
+    color: #d8ccf6;
     max-width: 560px;
     margin-inline: auto;
   }
@@ -95,10 +96,11 @@
     color: var(--focus);
   }
   .section-head h2 {
-    font-family: var(--serif);
-    font-weight: 400;
+    font-family: var(--display);
+    font-weight: 700;
     font-size: 26px;
     margin-top: 6px;
+    letter-spacing: -0.2px;
   }
   .section-head p { color: var(--text-mut); font-size: 14px; margin-top: 6px; max-width: 640px; }
 
@@ -123,9 +125,9 @@
   .type-row { display: grid; grid-template-columns: 88px 1fr; gap: 18px; align-items: baseline; padding: 16px 0; border-bottom: 1px dashed var(--border); }
   .type-row:last-child { border-bottom: none; }
   .type-row .label { font-size: 12px; color: var(--text-faint); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
-  .t-display { font-family: var(--serif); font-size: 40px; line-height: 1.15; }
-  .t-h1 { font-family: var(--serif); font-size: 30px; line-height: 1.2; }
-  .t-h2 { font-family: var(--serif); font-size: 22px; line-height: 1.25; }
+  .t-display { font-family: var(--display); font-size: 40px; line-height: 1.14; font-weight: 700; letter-spacing: -0.4px; }
+  .t-h1 { font-family: var(--display); font-size: 30px; line-height: 1.16; font-weight: 700; letter-spacing: -0.3px; }
+  .t-h2 { font-family: var(--display); font-size: 22px; line-height: 1.2; font-weight: 700; letter-spacing: -0.2px; }
   .t-h3 { font-family: var(--sans); font-size: 16px; font-weight: 600; }
   .t-body { font-size: 15px; max-width: 58ch; }
   .t-small { font-size: 13px; color: var(--text-mut); }
@@ -169,7 +171,7 @@
   }
   .input::placeholder, .textarea::placeholder { color: var(--text-faint); }
   .input:hover, .select:hover, .textarea:hover { border-color: var(--text-faint); }
-  .input:focus, .select:focus, .textarea:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(47,126,166,.16); }
+  .input:focus, .select:focus, .textarea:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 3px rgba(124,58,237,.16); }
   .select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236b675e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 14px center; padding-right: 40px; }
   .textarea { min-height: 96px; resize: vertical; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
@@ -195,7 +197,7 @@
   @media (max-width: 820px) { .sample-grid { grid-template-columns: 1fr; } }
 
   .good-morning { padding: 26px; }
-  .gm-title { font-family: var(--serif); font-size: 24px; }
+  .gm-title { font-family: var(--display); font-weight: 700; font-size: 25px; letter-spacing: -0.2px; }
   .gm-sub { color: var(--text-mut); font-size: 13.5px; margin-top: 2px; }
   .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 22px 0; }
   .stat { background: var(--surface-2); border-radius: var(--radius-sm); padding: 12px 14px; }
@@ -223,7 +225,7 @@
     box-shadow: var(--shadow-md);
     transition: border-color .15s, box-shadow .15s;
   }
-  .cmd-bar:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(47,126,166,.16); }
+  .cmd-bar:focus-within { border-color: var(--focus); box-shadow: 0 0 0 3px rgba(124,58,237,.16); }
   .cmd-bar input { flex: 1; border: none; outline: none; background: transparent; font: 500 15px var(--sans); color: var(--text); min-width: 0; }
   .cmd-bar input::placeholder { color: var(--text-faint); }
   .cmd-btn { background: var(--primary); color: #fff; border: none; border-radius: 999px; padding: 9px 18px; font: 600 14px var(--sans); cursor: pointer; }
@@ -256,10 +258,10 @@
       <p>A restrained, warm palette. Deep teal signals trust and calm; the warm gray neutrals keep the surface quiet so the assistant's words stay the focus.</p>
     </div>
     <div class="palette">
-      <div class="swatch"><div class="tile" style="background:#14506b"></div><div class="meta"><div class="name">Primary</div><div class="hex">#14506B</div><div class="use">Actions, links, active states</div></div></div>
-      <div class="swatch"><div class="tile" style="background:#0e3b50"></div><div class="meta"><div class="name">Primary Strong</div><div class="hex">#0E3B50</div><div class="use">Hover / pressed</div></div></div>
-      <div class="swatch"><div class="tile" style="background:#0a2633"></div><div class="meta"><div class="name">Primary Ink</div><div class="hex">#0A2633</div><div class="use">Deepest emphasis</div></div></div>
-      <div class="swatch"><div class="tile" style="background:#e2eef3"></div><div class="meta"><div class="name">Primary Soft</div><div class="hex">#E2EEF3</div><div class="use">Tints, AI cards, chips</div></div></div>
+      <div class="swatch"><div class="tile" style="background:#5b21b6"></div><div class="meta"><div class="name">Primary</div><div class="hex">#5B21B6</div><div class="use">Actions, links, active states</div></div></div>
+      <div class="swatch"><div class="tile" style="background:#4c1d95"></div><div class="meta"><div class="name">Primary Strong</div><div class="hex">#4C1D95</div><div class="use">Hover / pressed</div></div></div>
+      <div class="swatch"><div class="tile" style="background:#2e1065"></div><div class="meta"><div class="name">Primary Ink</div><div class="hex">#2E1065</div><div class="use">Deepest emphasis</div></div></div>
+      <div class="swatch"><div class="tile" style="background:#ede9fe"></div><div class="meta"><div class="name">Primary Soft</div><div class="hex">#EDE9FE</div><div class="use">Tints, AI cards, chips</div></div></div>
       <div class="swatch"><div class="tile" style="background:#fafaf8"></div><div class="meta"><div class="name">Background</div><div class="hex">#FAFAF8</div><div class="use">App canvas</div></div></div>
       <div class="swatch"><div class="tile" style="background:#ffffff"></div><div class="meta"><div class="name">Surface</div><div class="hex">#FFFFFF</div><div class="use">Cards, panels</div></div></div>
       <div class="swatch"><div class="tile" style="background:#f4f3ef"></div><div class="meta"><div class="name">Surface 2</div><div class="hex">#F4F3EF</div><div class="use">Subtle fills</div></div></div>
@@ -269,7 +271,7 @@
       <div class="swatch"><div class="tile" style="background:#1d7a5c"></div><div class="meta"><div class="name">Success</div><div class="hex">#1D7A5C</div><div class="use">Connected, completed</div></div></div>
       <div class="swatch"><div class="tile" style="background:#a05f16"></div><div class="meta"><div class="name">Warning</div><div class="hex">#A05F16</div><div class="use">Needs attention</div></div></div>
       <div class="swatch"><div class="tile" style="background:#b4342e"></div><div class="meta"><div class="name">Critical</div><div class="hex">#B4342E</div><div class="use">Overdue, urgent</div></div></div>
-      <div class="swatch"><div class="tile" style="background:#2f7ea6"></div><div class="meta"><div class="name">Focus</div><div class="hex">#2F7EA6</div><div class="use">Keyboard focus rings</div></div></div>
+      <div class="swatch"><div class="tile" style="background:#7c3aed"></div><div class="meta"><div class="name">Focus</div><div class="hex">#7C3AED</div><div class="use">Keyboard focus rings</div></div></div>
     </div>
   </section>
 
@@ -278,7 +280,7 @@
     <div class="section-head">
       <div class="kicker">02</div>
       <h2>Typography</h2>
-      <p>Inter for the interface, Libre Baskerville for calm editorial moments (the daily briefing). Tabular numerals keep dates, counts and deadlines aligned.</p>
+      <p>Plus Jakarta Sans for headings and key moments (the daily briefing) — clean, geometric, highly legible. Inter for the interface. Tabular numerals keep dates, counts and deadlines aligned.</p>
     </div>
     <div class="card card-pad">
       <div class="type-row"><div class="label">Display</div><div class="t-display">Your day, at a glance</div></div>
