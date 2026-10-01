@@ -5,6 +5,7 @@
 **Related spec:** [`LIFE OS folder/LIFE OS PROJECT.md`](LIFE%20OS%20folder/LIFE%20OS%20PROJECT.md) — master build specification (100 sections)
 **Repository:** https://github.com/Temitope1978/Life-OS
 **Last updated:** 2026-09-27
+**Roadmap:** [`ROADMAP.md`](ROADMAP.md) — eight phases, current position tracked there
 
 ---
 
@@ -78,11 +79,41 @@ Updated `design.html` based on review feedback:
   - Focus ring `#2F7EA6` → `#7C3AED`
   - Hero gradient, swatch tiles, and focus glows updated to match.
 
+### 2026-09-27 — Phase 2: Demo/Simulation Build Specification
+
+Two documents created:
+
+**`ROADMAP.md`** — the project broken into eight workable phases, each with
+deliverables and an exit condition, plus four sequencing rules that exist
+because they are the likeliest ways this project loses momentum. The critical
+rule: do not begin live integrations (Phase 6) before the simulation (Phase 3)
+works.
+
+**`LIFE OS folder/DEMO BUILD SPEC.md`** — the Phase 2 implementation
+specification. Contents:
+
+- Scope, with an explicit out-of-scope table (no real auth, integrations or AI
+  calls in Phase 3, and the reason for each)
+- Four-layer architecture with the **LLM seam** — the interface a real model
+  plugs into in Phase 5, defined now so no engine knows which provider it is
+- Complete seed dataset: 6 contacts, 6 calendar events (including a deliberate
+  conflict), 24 emails spanning all 8 categories including a suspicious one,
+  3 meetings with real transcript excerpts, and tasks/commitments/follow-ups
+  across every state — all telling one continuous ABC-proposal story
+- Screen-by-screen specification for all nine screens
+- Deterministic rules the simulated "AI" follows: email classification
+  (R-1…R-7), commitment extraction, priority scoring, forgetting detection
+- Demo walkthrough script and five-user test protocol with success thresholds
+- Phase 3 definition of done, risk table, and build order
+
 ---
 
 ## Current status
 
-**Phase 0 — concept / specification.** The master build specification and the
-design preview are complete. Per sections 89 and 99, the next artifact is a
-**Demo/Simulation Build Specification**, followed by a functional simulated MVP
-before any live integrations.
+**Phase 2 — Demo/Simulation Build Specification — complete.**
+
+The specification is written. The exit condition for Phase 2 is that another
+developer could build the demo from this document alone, with no further
+questions. Phase 3 (building the simulation) has not started.
+
+The master build specification and design preview remain complete and unchanged.
