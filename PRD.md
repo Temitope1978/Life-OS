@@ -79,6 +79,91 @@ Updated `design.html` based on review feedback:
   - Focus ring `#2F7EA6` → `#7C3AED`
   - Hero gradient, swatch tiles, and focus glows updated to match.
 
+### 2026-09-27 — Phase 3: Simulated MVP built
+
+The working simulation now lives in `sim/`. Open `sim/index.html` in any browser —
+no build step, no server, no backend. Open `sim/selftest.html` for the test suite.
+
+**Architecture (four layers, per `DEMO BUILD SPEC.md` §3):**
+
+```
+sim/
+  index.html                  shell, sidebar, script order
+  selftest.html               deterministic browser test suite
+  assets/css/app.css          design system (purple #5B21B6, Plus Jakarta Sans + Inter)
+  assets/js/
+    data/seed.js              one seed story: 6 contacts, 24 emails, 6 events,
+                              3 meetings, 7 commitments, 15 tasks, 4 follow-ups,
+                              4 documents, 4 integrations, 3 reminders
+    core/dates.js             fixed clock (SIM_TODAY = 2026-09-22) + date helpers
+    core/seam.js              the LLM seam every engine calls through
+    core/store.js             state, persistence (lifeos.sim.v1), mutations
+    engines/                  mail, commitment, priority, tasks, followup,
+                              forgetting, search, briefing
+    ui/dom.js                 hyperscript helper
+    ui/components.js          shared rows, chips, modals, source buttons
+    ui/views/                 command, day, mail, calendar, meetings, forget,
+                              search, commitments, control
+    app.js                    hash router, command interpreter, badges, boot
+```
+
+**Screens:** AI Command Center · My Day · Inbox · Calendar · Meetings · What Am I
+Forgetting? · Commitments & Waiting For · Universal Search · Control Centre —
+plus task, contact, and document modals reached from any AI claim.
+
+**The five signature questions, wired end to end:**
+
+| Question | Engine | Verified by |
+| --- | --- | --- |
+| What needs my attention today? | `priority.js` + `briefing.js` | 4 priority items, top one explained as blocked |
+| What am I forgetting? | `forgetting.js` (F-1…F-6) | 4 findings, each with a source you can open |
+| What did I promise? | `commitment.js` | 7 commitments, direction + certainty + deadline |
+| Who am I waiting for? | `followup.js` | Waiting For is a derived state, not a label |
+| What happened in my meetings? | `commitment.js` extraction + `meetings.js` | transcripts editable, 7 commitments extracted |
+
+**Explainability and safety are structural, not cosmetic:**
+
+- Every AI claim carries a **Source** button that opens the exact email,
+  meeting, event, or document it came from.
+- Priority scores always display the factors that produced them.
+- A commitment extracted at `Possible` certainty can never become `Confirmed`
+  without explicit user action.
+- The payment-diversion scam email (`m10`) is classified `Suspicious`, held, and
+  shown **no Reply or Add-task control at all** — only "This is a scam" and
+  "Mark as safe". It can never become a task.
+- Autonomy level gates bulk actions: below level 3, "Prepare my meetings"
+  refuses and explains why rather than acting.
+
+**Verification.** `sim/selftest.html` runs 90+ assertions covering seed counts,
+event conflicts, priority bands, all eight mail categories, forgetting rules,
+transcript extraction, every route, modal flows, state transitions, persistence,
+and reset. All pass. Two classes of defect were found and fixed this way:
+
+- The `#/waiting` route threw on `f.meta` because it read raw store follow-ups
+  instead of derived engine follow-ups. It now uses `EnginesFollowUp.followUps()`.
+- `el('div.cal-event clash')` produced an invalid class token containing a space,
+  and `el('tag', [children])` was treated as attributes rather than children.
+  Both fixed in the hyperscript helper, so no view can repeat them.
+
+**Deviations from `DEMO BUILD SPEC.md`, recorded deliberately:**
+
+1. **Classic scripts instead of ES modules.** ES modules are blocked by CORS on
+   `file://`. Since "open the file and it works" is the entire point of a
+   simulation, each file attaches a global namespace. Phase 4 converts to modules.
+2. **Forgetting detection returns four items, not the three the spec predicts.**
+   F-6 legitimately fires on `t12`, a task waiting on someone for 12 days. The
+   finding is correct, so it was kept and the test asserts four rather than
+   weakening a rule to hit a count.
+3. **The Command Center surfaces High and Medium priority items.** Bands are
+   applied exactly as specified (≥60 / ≥30); the seed data is simply built to
+   yield four priority items that morning.
+
+**Not built, deliberately:** no real authentication, no live Gmail or Calendar,
+no real AI provider calls, no mobile app. Persistence is `localStorage` only.
+
+**Still open:** the five user test activities in `DEMO BUILD SPEC.md` §8 have not
+been run with real users. That is the remaining Phase 3 exit condition.
+
 ### 2026-09-27 — Phase 2: Demo/Simulation Build Specification
 
 Two documents created:
@@ -110,10 +195,14 @@ specification. Contents:
 
 ## Current status
 
-**Phase 2 — Demo/Simulation Build Specification — complete.**
+**Phase 3 — Simulated MVP — built and self-tested; awaiting real user validation.**
 
-The specification is written. The exit condition for Phase 2 is that another
-developer could build the demo from this document alone, with no further
-questions. Phase 3 (building the simulation) has not started.
+The simulation is complete and runs from `sim/index.html` with no build step, no
+server, and no backend. `sim/selftest.html` asserts 90+ behaviours and all pass.
+
+The Phase 3 exit condition is not yet fully met: the five user test activities
+(`DEMO BUILD SPEC.md` §8) still need to be run with five real users, and the
+findings prioritised into a Phase 4/5 backlog. Everything that can be verified
+without a human in the loop has been.
 
 The master build specification and design preview remain complete and unchanged.

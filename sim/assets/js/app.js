@@ -1,0 +1,341 @@
+/* ============================================================
+   App — router, command interpreter, badges, source navigation
+   ============================================================ */
+(function () {
+  'use strict';
+
+  var el = function () { return window.$.el.apply(null, arguments); };
+  var esc = function (s) { return window.$.esc(s); };
+
+  /* ---------- Routing ---------- */
+  function parseHash() {
+    var h = (location.hash || '#/command').replace(/^#\/?/, '');
+    var parts = h.split('/').map(decodeURIComponent);
+    return { path: '/' + (parts[0] || 'command'), params: parts.slice(1) };
+  }
+
+  function go(hash) {
+    if (location.hash === hash) { render(); return; }
+    location.hash = hash;
+  }
+
+  /* ---------- Modals for detail routes ---------- */
+  function taskModal(id) {
+    var t = window.Store.task(id);
+    if (!t) { window.UI.toast('Task not found', 'err'); return; }
+    var r = window.EnginesPriority.scoreTask(t);
+    var b = window.EnginesTasks.blocker(t);
+    var p = t.contactId ? window.Store.contact(t.contactId) : null;
+    var person = b ? b.person : p;
+
+    var statusSel = el('select.select', window.EnginesTasks.STATES.map(function (s) {
+      return el('option', { value: s, text: s, selected: t.status === s });
+    }));
+    var dateInput = el('input.input', { type: 'date', value: t.dueDate || '' });
+
+    var body = el('div.stack', [
+      el('div.row', [
+        window.UI.chip(r.band + ' priority · ' + r.score + ' pts', r.band === 'high' ? 'danger' : r.band === 'medium' ? 'warn' : 'muted'),
+        window.UI.chip(t.project || 'No project', 'muted'),
+        t.userCreated ? window.UI.chip('Created by you', 'acc') : null
+      ]),
+      el('div.why', { html: '<strong>Why this ranks here:</strong> ' + esc(window.EnginesPriority.explain(t)) }),
+      window.UI.whyPanel('This task came from ' + (t.source ? esc(window.Store.resolveSource(t.source).label) : 'you directly') + '.', t.source),
+      b ? el('div.alert.alert-warn', {
+        html: '<strong>Blocked.</strong> ' + esc(window.EnginesTasks.dependencyInsight(t).text) +
+              ' <em>' + esc(window.EnginesTasks.dependencyInsight(t).suggestion) + '</em>'
+      }) : null,
+      el('div.two-col', [
+        el('div.field', [el('label', { text: 'Status' }), statusSel]),
+        el('div.field', [el('label', { text: 'Due date' }), dateInput])
+      ]),
+      el('div.field', [
+        el('label', { text: 'Move to' }),
+        el('div.row', [
+          person ? window.UI.btnSm('Waiting on ' + person.name.split(' ')[0], 'secondary', function () {
+            window.Store.mut.updateTask(t.id, { status: 'Waiting' });
+            m.close(); window.UI.toast('Moved to Waiting', 'ok'); render();
+          }) : null,
+          window.UI.btnSm('In Progress', 'secondary', function () {
+            window.Store.mut.updateTask(t.id, { status: 'In Progress' });
+            m.close(); window.UI.toast('Moved to In Progress', 'ok'); render();
+          }),
+          window.UI.btnSm('Completed', 'primary', function () {
+            window.Store.mut.updateTask(t.id, { status: 'Completed' });
+            m.close(); window.UI.toast('Completed', 'ok'); render();
+          })
+        ].filter(Boolean))
+      ])
+    ].filter(Boolean));
+
+    var m = window.UI.modal({
+      title: t.title,
+      body: body,
+      actions: [
+        el('button.btn.btn-primary', {
+          type: 'button', text: 'Save changes', onclick: function () {
+            window.Store.mut.updateTask(t.id, { status: statusSel.value, dueDate: dateInput.value || null });
+            m.close(); window.UI.toast('Task updated', 'ok'); render();
+          }
+        })
+      ],
+      onClose: render
+    });
+  }
+
+  function contactModal(id) {
+    var c = window.Store.contact(id);
+    if (!c) return;
+    var ks = window.Store.commitments().filter(function (k) { return k.personId === id; });
+    var related = window.EnginesSearch.byPerson(id);
+
+    var m = window.UI.modal({
+      title: c.name,
+      body: el('div.stack', [
+        el('div.row', [
+          window.UI.avatar(c.id, 44),
+          el('div.grow', [
+            el('div.t', { text: c.relationship + ' · ' + c.org }),
+            el('div.s', { text: c.email + ' · last interaction ' + window.D.formatDate(c.lastInteraction) })
+          ])
+        ]),
+        el('div.s', { text: c.notes }),
+        el('div', [
+          el('div.t-cap', { text: 'Commitments' }),
+          el('div.stack', ks.length ? ks.map(function (k) { return window.UI.commitmentRow(k); })
+            : [el('div.s.faint', { text: 'No commitments with this person.' })])
+        ]),
+        el('div', [
+          el('div.t-cap', { text: 'Everything about ' + c.name.split(' ')[0] }),
+          el('div.stack', related.length ? related.slice(0, 12).map(function (d) {
+            var row = el('div.item.click', [
+              el('span.dot.neutral'),
+              el('div.grow', [el('div.t', { text: d.title }), el('div.s', { text: d.meta })])
+            ]);
+            row.onclick = function () { m.close(); go(routeFor(d)); };
+            return row;
+          }) : [el('div.s.faint', { text: 'Nothing found.' })])
+        ])
+      ]),
+      onClose: render
+    });
+  }
+
+  function routeFor(doc) {
+    switch (doc.kind) {
+      case 'email': return '#/mail/' + doc.id;
+      case 'meeting': return '#/meetings/' + doc.id;
+      case 'task': return '#/tasks/' + doc.id;
+      case 'contact': return '#/contacts/' + doc.id;
+      case 'document': return '#/documents/' + doc.id;
+      case 'commitment': return '#/commitments';
+      case 'event': return '#/calendar';
+      case 'followup': return '#/waiting';
+    }
+    return '#/search';
+  }
+
+  function documentsModal(id) {
+    var d = id ? window.Store.document(id) : null;
+    var docs = window.Store.documents();
+
+    var m = window.UI.modal({
+      title: d ? d.filename : 'Documents',
+      body: el('div.stack', d ? [
+        el('div.row', [window.UI.chip(d.type, 'acc'), window.UI.chip(d.project || 'No project', 'muted'),
+                       window.UI.chip('Updated ' + window.D.formatDate(d.updated), 'muted')]),
+        el('p', { text: d.summary }),
+        el('div.field', [
+          el('label', { text: 'Deadlines in this document' }),
+          el('div.row', (d.deadlines || []).map(function (x) { return window.UI.chip(window.D.dueLabel(x), window.D.isPast(x) ? 'danger' : 'muted'); }))
+        ]),
+        el('div.field', [
+          el('label', { text: 'Actions it implies' }),
+          el('ul.tidy', (d.actions || []).map(function (a) { return el('li', { text: a }); }))
+        ]),
+        el('div.row', d.contactIds.map(function (cid) {
+          var c = window.Store.contact(cid);
+          return el('button.source', { type: 'button', text: 'Shared with ' + c.name, onclick: function () { m.close(); contactModal(cid); } });
+        }))
+      ] : docs.map(function (doc) {
+        var row = el('div.item.click', [
+          el('span.dot.neutral'),
+          el('div.grow', [el('div.t', { text: doc.filename }), el('div.s', { text: doc.summary })])
+        ]);
+        row.onclick = function () { m.close(); documentsModal(doc.id); };
+        return row;
+      })),
+      onClose: render
+    });
+  }
+
+  /* ---------- Source navigation ---------- */
+  function openSource(s) {
+    if (!s) return;
+    if (s.kind === 'meeting') go('#/meetings/' + s.id);
+    else if (s.kind === 'email') go('#/mail/' + s.id);
+    else if (s.kind === 'event') go('#/calendar');
+    else if (s.kind === 'document') documentsModal(s.id);
+  }
+
+  /* ---------- Meeting briefing ---------- */
+  function openEventBrief(eventId) {
+    window.ViewMeetings.openBriefing(eventId);
+  }
+
+  /** Prepare every meeting that needs it — respects the autonomy level. */
+  function prepareAll() {
+    var need = window.EnginesTasks.needsPrep();
+    if (!need.length) { window.UI.toast('Every meeting is already prepared', 'ok'); return; }
+    var level = window.Store.user().autonomy;
+
+    if (level < 3) {
+      window.UI.toast('Autonomy is ' + window.UI.autonomyMeta(level).label + ' — raise it to Prepare first', 'err');
+      return;
+    }
+
+    var doIt = function () {
+      need.forEach(function (e) { window.Store.mut.markPrepared(e.id); });
+      window.UI.toast(need.length + ' meeting' + (need.length === 1 ? '' : 's') + ' prepared', 'ok');
+      render();
+    };
+
+    var m = window.UI.modal({
+      title: 'Prepare ' + need.length + ' meeting' + (need.length === 1 ? '' : 's') + '?',
+      body: el('div.stack', [
+        el('p', { text: 'For each meeting the AI will read the last interaction, your open commitments and every prior decision, then produce a briefing.' }),
+        el('ul.tidy', need.map(function (e) {
+          return el('li', { text: window.D.formatDate(e.date) + ' ' + e.start + ' — ' + e.title });
+        })),
+        el('div.s.faint', {
+          text: 'Preparation only ever creates drafts — nothing is sent, booked or shared.'
+        })
+      ]),
+      actions: [el('button.btn.btn-primary', { type: 'button', text: 'Prepare now', onclick: function () { m.close(); doIt(); } })]
+    });
+  }
+
+  /* ---------- Command interpreter ---------- */
+  var COMMANDS = [
+    { re: /prepare (my )?day|brief me|start my day|daily briefing/i, run: function () {
+        go('#/day'); window.UI.toast('Your day is ready — top item first', 'ok');
+      } },
+    { re: /what am i forgetting|forgot|forgotten|forgetting/i, run: function () {
+        go('#/forget');
+      } },
+    { re: /waiting for|who am i waiting|blocked on/i, run: function () {
+        go('#/waiting');
+      } },
+    { re: /what did i promise|my commitments|what have i promised/i, run: function () {
+        go('#/commitments');
+      } },
+    { re: /summar(y|ise|ize) (my )?email|inbox|email/i, run: function () {
+        go('#/mail');
+      } },
+    { re: /prepare my meetings|brief me for|meeting brief/i, run: function () {
+        prepareAll();
+      } },
+    { re: /conflict|double.?book/i, run: function () {
+        go('#/calendar');
+      } },
+    { re: /control|setting|autonomy|permission|integration/i, run: function () {
+        go('#/control');
+      } },
+    { re: /search|find .*(file|document)/i, run: function (q) {
+        go('#/search/' + encodeURIComponent(q));
+      } }
+  ];
+
+  function runCommand(q) {
+    for (var i = 0; i < COMMANDS.length; i++) {
+      if (COMMANDS[i].re.test(q)) { COMMANDS[i].run(q); return; }
+    }
+    go('#/search/' + encodeURIComponent(q));
+  }
+
+  /* ---------- Badges ---------- */
+  function setBadge(id, n) {
+    var b = document.getElementById(id);
+    if (!b) return;
+    b.textContent = n > 0 ? String(n) : '';
+  }
+
+  function badges() {
+    var unread = window.Store.emails().filter(function (e) { return e.unread; }).length;
+    setBadge('badge-mail', unread);
+    setBadge('badge-forget', window.EnginesForgetting.detect().length);
+    var unconfirmed = window.EnginesCommitment.userOwed().filter(function (k) { return !k.confirmedByUser; }).length;
+    setBadge('badge-commit', unconfirmed);
+  }
+
+  /* ---------- Render ---------- */
+  var lastPath = null;
+
+  function render() {
+    var r = parseHash();
+    var root = document.getElementById('view');
+    window.$.clear(root);
+
+    switch (r.path) {
+      case '/day':       window.ViewDay.view(root); break;
+      case '/mail':      window.ViewMail.view(root); break;
+      case '/calendar':  window.ViewCalendar.view(root); break;
+      case '/meetings':  window.ViewMeetings.view(root); break;
+      case '/forget':    window.ViewForget.view(root); break;
+      case '/search':    window.ViewSearch.view(root); break;
+      case '/commitments':
+      case '/waiting':   window.ViewCommitments.view(root); break;
+      case '/control':   window.ViewControl.view(root); break;
+      case '/tasks':     taskModal(r.params[0]); break;
+      case '/contacts':  contactModal(r.params[0]); break;
+      case '/documents': documentsModal(r.params[0]); break;
+      case '/command':
+      default:           window.ViewCommand.view(root); break;
+    }
+
+    navState(r.path);
+    badges();
+    lastPath = r.path;
+    window.scrollTo(0, 0);
+  }
+
+  function navState(path) {
+    var nav = path === '/waiting' ? 'commitments' : path.replace('/', '');
+    Array.prototype.forEach.call(document.querySelectorAll('.sidebar a'), function (a) {
+      a.classList.toggle('active', a.getAttribute('data-nav') === nav);
+    });
+  }
+
+  /* ---------- Boot ---------- */
+  function boot() {
+    window.Store.init();
+    window.Store.subscribe(function () { render(); });
+
+    window.addEventListener('hashchange', render);
+    if (!location.hash) location.hash = '#/command';
+    render();
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
+        e.preventDefault();
+        var bar = document.querySelector('.cmd-bar input');
+        if (bar) bar.focus();
+      }
+    });
+  }
+
+  window.App = {
+    go: go,
+    render: render,
+    route: parseHash,
+    runCommand: runCommand,
+    openSource: openSource,
+    openEventBrief: openEventBrief,
+    prepareAll: prepareAll,
+    badges: badges,
+    boot: boot
+  };
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();

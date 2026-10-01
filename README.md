@@ -72,12 +72,29 @@ AI does not get unrestricted execution. High-impact actions require confirmation
 
 ## What’s in this folder
 
-This repository currently holds the product bible (master build specification):
+| Path | What it is |
+| --- | --- |
+| `LIFE OS folder/LIFE OS PROJECT.md` | Master build specification — the source of truth for product principles, MVP scope, architecture, data model |
+| `LIFE OS folder/DEMO BUILD SPEC.md` | Phase 2 implementation specification for the simulated MVP |
+| `design.html` | Visual design preview: palette, type scale, controls, Command Center |
+| `sim/` | **The working simulated MVP (Phase 3).** Open `sim/index.html` in a browser |
+| `sim/selftest.html` | Deterministic browser test suite — open it in a browser, no build step |
+| `PRD.md` | Running log of project changes |
+| `ROADMAP.md` | Eight phases with exit conditions; current position tracked there |
 
-- `LIFE OS folder/LIFE OS PROJECT.md`
+## Running the simulated MVP
 
-Use that specification as the source of truth for product principles, MVP scope, architecture, data model, and roadmap.
+Open `sim/index.html` directly in a browser. There is no build step, no server, and
+no backend. Open `sim/selftest.html` to run the test suite.
+
+The simulation is deterministic: one fixed date (2026-09-22) and one seed dataset
+telling a single continuous story — an ABC proposal that is blocked on a client,
+plus a payment-diversion scam email the system refuses to act on. Your own
+decisions (tasks created, commitments confirmed, autonomy level) persist in
+`localStorage` under `lifeos.sim.v1`.
 
 ## Current status
 
-**Phase 0 — concept / specification.** Next recommended artifact: a demo/simulation build specification, then a functional simulated MVP before live integrations.
+**Phase 3 — simulated MVP is built and self-tested.** Next: Phase 4 (data model
+and authentication). Real integrations stay deliberately deferred until the
+simulation has been validated with users.

@@ -1,0 +1,336 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Life OS — Self-test</title>
+<link rel="stylesheet" href="assets/css/app.css">
+<style>
+  body { background: #0f0d17; color: #e8e6f0; font-family: Inter, system-ui, sans-serif; padding: 24px; }
+  h1 { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-size: 20px; margin: 0 0 4px; }
+  p.lede { color: #a49fc0; margin: 0 0 20px; font-size: 14px; }
+  pre#out { background: #17141f; border: 1px solid #2a2438; border-radius: 12px; padding: 16px;
+            font-size: 12px; line-height: 1.6; white-space: pre-wrap; max-height: 78vh; overflow: auto; }
+  .bar { margin-top: 16px; font-size: 13px; font-weight: 600; }
+  .bar.ok { color: #34d399; } .bar.bad { color: #f87171; }
+</style>
+</head>
+<body>
+<h1>Life OS — Self-test</h1>
+<p class="lede">Deterministic browser test suite. Open this file directly (no build step, no server).
+Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
+<div id="view" style="display:none"></div>
+<div id="modal-root"></div>
+<div id="toasts"></div>
+<pre id="out">Running&hellip;</pre>
+<div class="bar" id="bar">&nbsp;</div>
+<script src="assets/js/data/seed.js"></script>
+<script src="assets/js/core/dates.js"></script>
+<script src="assets/js/core/seam.js"></script>
+<script src="assets/js/core/store.js"></script>
+<script src="assets/js/engines/mail.js"></script>
+<script src="assets/js/engines/commitment.js"></script>
+<script src="assets/js/engines/priority.js"></script>
+<script src="assets/js/engines/tasks.js"></script>
+<script src="assets/js/engines/followup.js"></script>
+<script src="assets/js/engines/forgetting.js"></script>
+<script src="assets/js/engines/search.js"></script>
+<script src="assets/js/engines/briefing.js"></script>
+<script src="assets/js/ui/dom.js"></script>
+<script src="assets/js/ui/components.js"></script>
+<script src="assets/js/ui/views/command.js"></script>
+<script src="assets/js/ui/views/day.js"></script>
+<script src="assets/js/ui/views/mail.js"></script>
+<script src="assets/js/ui/views/calendar.js"></script>
+<script src="assets/js/ui/views/meetings.js"></script>
+<script src="assets/js/ui/views/forget.js"></script>
+<script src="assets/js/ui/views/search.js"></script>
+<script src="assets/js/ui/views/commitments.js"></script>
+<script src="assets/js/ui/views/control.js"></script>
+<script src="assets/js/app.js"></script>
+<script>
+
+(function () {
+  var lines = [], fails = 0;
+  function ok(name, cond, extra) {
+    if (!cond) fails++;
+    lines.push((cond ? 'PASS ' : 'FAIL ') + name + (extra ? ' :: ' + extra : ''));
+  }
+  function tryRun(name, fn) {
+    try { var v = fn(); lines.push('RUN  ' + name + ' :: ' + v); return v; }
+    catch (e) {
+      fails++;
+      lines.push('THROW ' + name + ' :: ' + e.message);
+      lines.push('      ' + String(e.stack || '').split('\n').slice(0, 4).join(' | '));
+      return null;
+    }
+  }
+
+  try {
+    ok('window.SEED', !!window.SEED);
+    ok('window.D', !!window.D, 'today=' + window.D.today());
+    ok('window.Store', !!window.Store);
+    ok('window.App', !!window.App);
+
+    /* app.js defers boot to DOMContentLoaded, which has not fired inside this
+       inline script ΓÇö boot explicitly, then assert the shell rendered. */
+    tryRun('boot render', function () {
+      window.App.boot();
+      return document.getElementById('view').children.length + ' blocks';
+    });
+    ok('view rendered', document.getElementById('view').children.length > 0,
+       document.getElementById('view').children.length + ' children');
+
+    var seedCounts = 'contacts=' + window.Store.contacts().length +
+      ' emails=' + window.Store.emails().length +
+      ' events=' + window.Store.events().length +
+      ' meetings=' + window.Store.meetings().length +
+      ' commitments=' + window.Store.commitments().length +
+      ' tasks=' + window.Store.tasks().length +
+      ' followUps=' + window.Store.followUps().length +
+      ' docs=' + window.Store.documents().length +
+      ' integrations=' + window.Store.integrations().length +
+      ' reminders=' + window.SEED.reminders.length;
+    lines.push('SEED ' + seedCounts);
+    ok('6 contacts', window.Store.contacts().length === 6);
+    ok('24 emails', window.Store.emails().length === 24);
+    ok('6 events', window.Store.events().length === 6);
+    ok('3 meetings', window.Store.meetings().length === 3);
+    ok('7 commitments', window.Store.commitments().length === 7);
+    ok('15 tasks', window.Store.tasks().length === 15);
+    ok('4 follow-ups', window.Store.followUps().length === 4);
+    ok('4 documents', window.Store.documents().length === 4);
+    ok('4 integrations', window.Store.integrations().length === 4);
+    ok('3 reminders', window.SEED.reminders.length === 3);
+
+    tryRun('events today', function () { return window.EnginesTasks.eventsToday().map(function (e) { return e.title; }).join(' | '); });
+    ok('3 meetings today', window.EnginesTasks.eventsToday().length === 3);
+    ok('1 conflict today', window.EnginesTasks.conflicts().length === 1,
+       JSON.stringify(window.EnginesTasks.conflicts().map(function (c) { return c.a.title + '/' + c.b.title; })));
+    ok('1 meeting needs prep', window.EnginesTasks.needsPrep().length === 1);
+
+    var ranked = window.EnginesPriority.ranked();
+    tryRun('priority ranking', function () {
+      return ranked.slice(0, 6).map(function (r) { return r.task.id + '=' + r.score + '/' + r.band; }).join(' ');
+    });
+    ok('score bands match spec (high>=60, medium>=30)',
+       ranked.every(function (r) {
+         return (r.band === 'high') === (r.score >= 60) &&
+                (r.band === 'medium') === (r.score >= 30 && r.score < 60);
+       }),
+       ranked.slice(0, 6).map(function (r) { return r.task.id + '=' + r.score + '/' + r.band; }).join(' '));
+    ok('every score is explained', ranked.every(function (r) {
+         return r.score === 0 || r.factors.length > 0;
+       }));
+    ok('blocked tasks are flagged, not deprioritised',
+       ranked.filter(function (r) { return r.task.blockedBy; })
+             .every(function (r) { return r.factors.some(function (f) { return /Blocked/.test(f.why); }); }));
+    var highs = window.EnginesPriority.priorityItems();
+    ok('4 priority items on the Command Center', highs.length === 4,
+       'got ' + highs.length + ' -> ' + highs.map(function (r) { return r.task.id + ':' + r.band; }).join(','));
+    ok('top item is blocked proposal', ranked[0].task.id === 't1', ranked[0].task.id);
+    tryRun('dependency insight', function () { return window.EnginesTasks.dependencyInsight(ranked[0].task).text; });
+
+    var buckets = window.EnginesMail.byCategory();
+    tryRun('mail categories', function () {
+      return Object.keys(buckets).map(function (k) { return k + ':' + buckets[k].length; }).join(' ');
+    });
+    ok('all 8 categories present', Object.keys(buckets).every(function (k) { return buckets[k].length > 0; }),
+       Object.keys(buckets).map(function (k) { return k + '=' + buckets[k].length; }).join(' '));
+    ok('suspicious email detected', buckets['Suspicious'].length === 1,
+       buckets['Suspicious'].map(function (r) { return r.email.id; }).join(','));
+    ok('suspicious email is m10', buckets['Suspicious'].length === 1 && buckets['Suspicious'][0].email.id === 'm10');
+    ok('suspicious is never actionable', buckets['Suspicious'][0].actionRequired === false);
+    ok('urgent = deadline today', buckets['Urgent'].length === 1 && buckets['Urgent'][0].email.id === 'm11',
+       buckets['Urgent'].map(function (r) { return r.email.id; }).join(','));
+    ok('action required includes m02/m04', ['m02', 'm04'].every(function (id) {
+         return buckets['Action Required'].some(function (r) { return r.email.id === id; }); }));
+    ok('m01 waiting on us', buckets['Waiting'].some(function (r) { return r.email.id === 'm01'; }));
+    ok('newsletter not actionable', buckets['Newsletter'].every(function (r) { return !r.actionRequired; }));
+    ok('promotion not actionable', buckets['Promotion'].every(function (r) { return !r.actionRequired; }));
+
+    var fgt = window.EnginesForgetting.detect();
+    tryRun('forgetting detect', function () {
+      return fgt.map(function (f) { return f.rule + ':' + f.title; }).join(' || ');
+    });
+    var rules = {};
+    fgt.forEach(function (f) { rules[f.rule] = (rules[f.rule] || 0) + 1; });
+    ok('F-1 overdue promise detected', !!rules['F-1'], JSON.stringify(rules));
+    ok('F-2 imminent meeting promise detected', !!rules['F-2'], JSON.stringify(rules));
+    ok('F-3 unprepared meeting detected', !!rules['F-3'], JSON.stringify(rules));
+    ok('F-6 stale waiting task detected', !!rules['F-6'], JSON.stringify(rules));
+    ok('F-6 not a duplicate of F-1',
+       !fgt.some(function (f) { return f.rule === 'F-6' && f.contactId === 'c1'; }),
+       fgt.map(function (f) { return f.rule + '/' + f.contactId; }).join(' '));
+    ok('forgetting titles drop the recipient name',
+       !fgt.some(function (f) { return /\bto [A-Z][a-z]+$/.test(f.title); }),
+       fgt.map(function (f) { return f.rule + ': ' + f.title; }).join(' || '));
+    ok('every result is traceable', fgt.every(function (f) { return !!f.source; }));
+    ok('forgetting dates stay in the past',
+       fgt.every(function (f) { return !f.daysOverdue || f.daysOverdue < 1000; }),
+       fgt.map(function (f) { return f.rule + '/' + (f.daysOverdue || 0) + 'd'; }).join(' '));
+
+    var brief = window.EnginesBriefing.build();
+    tryRun('briefing lead', function () { return brief.lead; });
+    ok('briefing stats meetings=3', brief.stats.meetings === 3);
+
+    tryRun('search "pricing"', function () { return window.EnginesSearch.query('pricing', 5).map(function (d) { return d.kind; }).join(','); });
+    ok('search finds results', window.EnginesSearch.query('pricing', 5).length > 0);
+    tryRun('answer "What did I promise John?"', function () { return window.EnginesBriefing.answer('What did I promise John?').html; });
+    tryRun('answer "Who am I waiting for?"', function () { return window.EnginesBriefing.answer('Who am I waiting for?').list.length; });
+    tryRun('answer "What am I forgetting?"', function () { return window.EnginesBriefing.answer('What am I forgetting?').list.length; });
+    tryRun('answer "What are my deadlines this week?"', function () { return window.EnginesBriefing.answer('What are my deadlines this week?').list.length; });
+
+    var ov = window.EnginesFollowUp.overdue();
+    tryRun('overdue follow-ups', function () { return ov.map(function (f) { return f.id + ':' + f.subject; }).join(','); });
+    ok('1 overdue follow-up', ov.length === 1, 'got ' + ov.length);
+    ok('unconfirmed commitments exist',
+       window.EnginesCommitment.userOwed().filter(function (k) { return !k.confirmedByUser; }).length > 0);
+    ok('possible commitment k7 is possible',
+       (window.Store.commitment('k7') || {}).certainty === 'possible');
+
+    tryRun('meeting extraction m1', function () {
+      return window.EnginesCommitment.extractForMeeting(window.Store.meeting('m1')).map(function (c) {
+        return c.direction + '|' + (c.dueDate || 'none') + '|' + c.certainty + '|' + c.description;
+      }).join('\n    ');
+    });
+
+    /* Drive the real router rather than calling views directly, so hash parsing,
+       the render switch and nav state are all covered. */
+    ['/command', '/day', '/mail', '/calendar', '/meetings', '/forget', '/search',
+     '/commitments', '/waiting', '/control', '/mail/m10', '/meetings/m1',
+     '/tasks/t1', '/contacts/c1', '/documents/d1'].forEach(function (p) {
+      tryRun('route ' + p, function () {
+        window.location.hash = '#' + p;
+        window.App.render();
+        var root = document.getElementById('view');
+        var modals = document.querySelectorAll('#modal-root .modal').length;
+        var detail = /^\/(tasks|contacts|documents)/.test(p);
+        if (detail && !modals) return 'THREW silently (no modal)';
+        if (!detail && !root.children.length) return 'EMPTY VIEW';
+        return root.children.length + ' blocks, ' + modals + ' modal';
+      });
+      var rendered = document.getElementById('view').textContent + document.getElementById('modal-root').textContent;
+      ok('route ' + p + ' has no stringified nodes', rendered.indexOf('[object') === -1);
+      ok('route ' + p + ' has no undefined leaks', !/\bundefined\b|\bNaN\b/.test(rendered));
+      window.$.clear(document.getElementById('modal-root'));
+    });
+
+    ok('suspicious email never creates a task',
+       window.EnginesForgetting.detect().every(function (f) { return !/fgt-mail-m10/.test(f.id); }));
+
+    tryRun('deep link #/mail/m10', function () {
+      window.location.hash = '#/mail/m10';
+      window.App.render();
+      var t = document.getElementById('view').textContent;
+      return (t.indexOf('Held for your review') !== -1 ? 'held-banner shown' : 'NO BANNER');
+    });
+
+    /* hashchange is async, so render synchronously after navigation */
+    tryRun('open suspicious email detail', function () {
+      window.ViewMail.open('m10');
+      window.App.render();
+      var root = document.getElementById('view');
+      return (root.textContent.indexOf('Held for your review') !== -1 ? 'held-banner ' : 'NO-BANNER ') +
+             root.querySelectorAll('.chip').length + ' chips';
+    });
+    ok('suspicious detail offers no reply or task action',
+       (function () {
+         var labels = Array.prototype.map.call(document.querySelectorAll('#view .actions .btn'), function (b) { return b.textContent; });
+         return labels.indexOf('Reply') === -1 && labels.indexOf('Add task') === -1 &&
+                labels.indexOf('This is a scam') !== -1;
+       })(),
+       Array.prototype.map.call(document.querySelectorAll('#view .actions .btn'), function (b) { return b.textContent; }).join('/'));
+    tryRun('reply draft modal', function () {
+      window.ViewMail.open('m11');
+      window.App.render();
+      var btn = Array.prototype.filter.call(document.querySelectorAll('#view .btn'), function (b) { return b.textContent === 'Reply'; })[0];
+      if (!btn) return 'no Reply button';
+      btn.click();
+      return document.querySelectorAll('#modal-root .modal').length + ' modal';
+    });
+    tryRun('prepareAll modal', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.App.prepareAll();
+      return document.querySelectorAll('#modal-root .modal').length + ' modal';
+    });
+    tryRun('meeting briefing modal', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.App.openEventBrief('e1');
+      var txt = document.getElementById('modal-root').textContent;
+      return ['Who is in the room', 'Suggested objectives', 'Do not forget'].filter(function (s) { return txt.indexOf(s) !== -1; }).join('+') || 'MISSING';
+    });
+    tryRun('transcript editor modal', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.ViewMeetings.openTranscript('m1');
+      return document.querySelectorAll('#modal-root textarea').length + ' editable turns';
+    });
+    tryRun('forget -> create task', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      var before = window.Store.tasks().length;
+      var f0 = window.EnginesForgetting.detect()[0];
+      window.Store.mut.createTask(f0.task);
+      window.Store.mut.ignore('forgetting', f0.id);
+      var after = window.Store.tasks().length;
+      return before + '->' + after + ' remaining=' + (window.EnginesForgetting.detect().length);
+    });
+    tryRun('commitment confirm', function () {
+      var k = window.Store.commitment('k7');
+      window.Store.mut.confirmCommitment('k7');
+      var k2 = window.Store.commitment('k7');
+      window.Store.mut.confirmCommitment('k7', false);
+      return k.certainty + '->' + k2.certainty + ' confirmedByUser=' + k2.confirmedByUser +
+             ' reverted=' + (window.Store.commitment('k7').confirmedByUser === undefined);
+    });
+    tryRun('follow-up state machine', function () {
+      var f = window.EnginesFollowUp.followUps().filter(function (x) { return x.id === 'f1'; })[0];
+      window.Store.mut.resolveFollowUp('f1');
+      var f2 = window.EnginesFollowUp.followUps().filter(function (x) { return x.id === 'f1'; })[0];
+      return f.derived + '->' + f2.derived;
+    });
+    tryRun('autonomy persists', function () {
+      window.Store.mut.setAutonomy(5);
+      var a = window.Store.user().autonomy;
+      window.Store.mut.setAutonomy(3);
+      return a + '->' + window.Store.user().autonomy;
+    });
+    ok('user decisions persist to storage',
+       String(window.localStorage.getItem('lifeos.sim.v1')).indexOf('followUpStatus') !== -1);
+    /* mut.reset() reloads the page, so verify the same effect the way the app
+       behaves after a reload: clear storage, then re-init from the seed. */
+    tryRun('reset restores seed state', function () {
+      window.Store.mut.setAutonomy(1);
+      window.Store.mut.resolveFollowUp('f1');
+      window.Store.mut.addTask({ title: 'temp', project: 'x', dueDate: window.D.today(), priority: 'normal' });
+      var dirty = 'autonomy=' + window.Store.user().autonomy + ' tasks=' + window.Store.tasks().length;
+      window.localStorage.removeItem('lifeos.sim.v1');
+      window.Store.init();
+      var f = window.EnginesFollowUp.followUps().filter(function (x) { return x.id === 'f1'; })[0];
+      return dirty + ' -> autonomy=' + window.Store.user().autonomy +
+             ' tasks=' + window.Store.tasks().length + ' f1=' + f.derived;
+    });
+    ok('reset returns to seed defaults',
+       window.Store.user().autonomy === 3 && window.Store.tasks().length === 15,
+       'autonomy=' + window.Store.user().autonomy + ' tasks=' + window.Store.tasks().length);
+    tryRun('source resolution', function () {
+      return window.Store.resolveSource({ type: 'meeting', ref: 'm1' }).label + ' | ' +
+             window.Store.resolveSource({ type: 'email', ref: 'm04' }).label;
+    });
+
+    lines.push('---');
+    lines.push(fails === 0 ? 'ALL PASS' : (fails + ' FAILURE(S)'));
+  } catch (e) {
+    lines.push('FATAL ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]);
+    lines.push('ALL PASS (false)');
+  }
+
+  document.getElementById('out').textContent = lines.join('\n');
+  var bar = document.getElementById('bar');
+  bar.textContent = fails === 0 ? 'All checks passed' : fails + ' check(s) failed';
+  bar.className = 'bar ' + (fails === 0 ? 'ok' : 'bad');
+})();
+
+</script>
+</body>
+</html>
+

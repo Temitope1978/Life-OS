@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Life OS — Simulation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/app.css">
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ============ Sidebar ============ -->
+  <nav class="sidebar">
+    <div class="brand">LIFE OS<small>AI executive assistant</small></div>
+
+    <div class="navlabel">Daily</div>
+    <a href="#/command"  data-nav="command"><span class="ic">◈</span> Command Center</a>
+    <a href="#/day"      data-nav="day"><span class="ic">☀</span> My Day</a>
+    <a href="#/mail"     data-nav="mail"><span class="ic">✉</span> Inbox <span class="badge" id="badge-mail"></span></a>
+    <a href="#/calendar" data-nav="calendar"><span class="ic">▦</span> Calendar</a>
+
+    <div class="navlabel">Intelligence</div>
+    <a href="#/meetings" data-nav="meetings"><span class="ic">◉</span> Meetings</a>
+    <a href="#/forget"   data-nav="forget"><span class="ic">?</span> What Am I Forgetting? <span class="badge" id="badge-forget"></span></a>
+    <a href="#/search"   data-nav="search"><span class="ic">⌕</span> Search</a>
+
+    <div class="navlabel">Control</div>
+    <a href="#/commitments" data-nav="commitments"><span class="ic">⚑</span> Commitments <span class="badge" id="badge-commit"></span></a>
+    <a href="#/waiting"  data-nav="waiting"><span class="ic">◷</span> Waiting For</a>
+    <a href="#/control"  data-nav="control"><span class="ic">⚙</span> Control Center</a>
+
+    <div class="sim-note">
+      <strong style="color:#cfc3e6">Simulation</strong><br>
+      Seeded data. No live accounts, no real AI calls. Approvals persist in your browser.
+    </div>
+  </nav>
+
+  <!-- ============ Main ============ -->
+  <main class="main">
+    <div id="view"></div>
+  </main>
+
+</div>
+
+<div class="toast-wrap" id="toasts"></div>
+<div id="modal-root"></div>
+
+<!-- ============ Seed data (must load first; also works over file://) ============ -->
+<script src="assets/js/data/seed.js"></script>
+
+<!-- ============ Core ============ -->
+<script src="assets/js/core/dates.js"></script>
+<script src="assets/js/core/seam.js"></script>
+<script src="assets/js/core/store.js"></script>
+
+<!-- ============ Engines ============ -->
+<script src="assets/js/engines/mail.js"></script>
+<script src="assets/js/engines/commitment.js"></script>
+<script src="assets/js/engines/priority.js"></script>
+<script src="assets/js/engines/tasks.js"></script>
+<script src="assets/js/engines/followup.js"></script>
+<script src="assets/js/engines/forgetting.js"></script>
+<script src="assets/js/engines/search.js"></script>
+<script src="assets/js/engines/briefing.js"></script>
+
+<!-- ============ UI ============ -->
+<script src="assets/js/ui/dom.js"></script>
+<script src="assets/js/ui/components.js"></script>
+<script src="assets/js/ui/views/command.js"></script>
+<script src="assets/js/ui/views/day.js"></script>
+<script src="assets/js/ui/views/mail.js"></script>
+<script src="assets/js/ui/views/calendar.js"></script>
+<script src="assets/js/ui/views/meetings.js"></script>
+<script src="assets/js/ui/views/forget.js"></script>
+<script src="assets/js/ui/views/search.js"></script>
+<script src="assets/js/ui/views/commitments.js"></script>
+<script src="assets/js/ui/views/control.js"></script>
+<script src="assets/js/app.js"></script>
+
+</body>
+</html>
