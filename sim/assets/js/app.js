@@ -19,6 +19,21 @@
     location.hash = hash;
   }
 
+  /* ---------- Modal close routing ----------
+     Detail routes (/tasks/:id, /contacts/:id, /documents/:id) render a
+     modal. Their onClose must navigate back to the previous non-modal
+     view. Calling render() here re-ran the same detail route and
+     re-opened the modal, so Cancel closed it and it instantly came back. */
+  var lastBaseRoute = '#/command';
+
+  function isModalRoute(path) {
+    return path === '/tasks' || path === '/contacts' || path === '/documents';
+  }
+
+  function closeModalToBase() {
+    go(lastBaseRoute);
+  }
+
   /* ---------- Modals for detail routes ---------- */
   function taskModal(id) {
     var t = window.Store.task(id);
@@ -79,7 +94,7 @@
           }
         })
       ],
-      onClose: render
+      onClose: closeModalToBase
     });
   }
 
@@ -117,7 +132,7 @@
           }) : [el('div.s.faint', { text: 'Nothing found.' })])
         ])
       ]),
-      onClose: render
+      onClose: closeModalToBase
     });
   }
 
@@ -155,17 +170,17 @@
         ]),
         el('div.row', d.contactIds.map(function (cid) {
           var c = window.Store.contact(cid);
-          return el('button.source', { type: 'button', text: 'Shared with ' + c.name, onclick: function () { m.close(); contactModal(cid); } });
+          return el('button.source', { type: 'button', text: 'Shared with ' + c.name, onclick: function () { go('#/contacts/' + cid); } });
         }))
       ] : docs.map(function (doc) {
         var row = el('div.item.click', [
           el('span.dot.neutral'),
           el('div.grow', [el('div.t', { text: doc.filename }), el('div.s', { text: doc.summary })])
         ]);
-        row.onclick = function () { m.close(); documentsModal(doc.id); };
+        row.onclick = function () { go('#/documents/' + doc.id); };
         return row;
       })),
-      onClose: render
+      onClose: closeModalToBase
     });
   }
 
@@ -175,7 +190,7 @@
     if (s.kind === 'meeting') go('#/meetings/' + s.id);
     else if (s.kind === 'email') go('#/mail/' + s.id);
     else if (s.kind === 'event') go('#/calendar');
-    else if (s.kind === 'document') documentsModal(s.id);
+    else if (s.kind === 'document') go('#/documents/' + s.id);
   }
 
   /* ---------- Meeting briefing ---------- */
@@ -213,6 +228,28 @@
       ]),
       actions: [el('button.btn.btn-primary', { type: 'button', text: 'Prepare now', onclick: function () { m.close(); doIt(); } })]
     });
+  }
+
+  /* ---------- Google OAuth callback ----------
+     The app-internal route Google redirects back to (via the
+     configurable, hosted redirect URI). It reads the authorization
+     code or error from the URL query string and shows the result.
+     It never stores the code, the state, or any token. */
+  function oauthCallback(params) {
+    var root = document.getElementById('view');
+    window.$.clear(root);
+    var service = (params && params[0]) || 'google';
+    var result = window.OAuth.handleCallback(service, location.search);
+    root.appendChild(window.UI.page(
+      'Connecting Google',
+      result.message,
+      el('div.stack', [
+        el('div.alert.' + (result.ok ? 'alert-info' : 'alert-warn'), { text: result.detail }),
+        el('div.actions', [
+          window.UI.btnSm('Back to Control', 'secondary', function () { go('#/control'); })
+        ])
+      ])
+    ));
   }
 
   /* ---------- Command interpreter ---------- */
@@ -273,6 +310,10 @@
 
   function render() {
     var r = parseHash();
+    /* Remember the last real (non-modal) view so a modal can return to it */
+    if (!isModalRoute(r.path)) {
+      lastBaseRoute = location.hash || '#/command';
+    }
     var root = document.getElementById('view');
     window.$.clear(root);
 
@@ -286,6 +327,7 @@
       case '/commitments':
       case '/waiting':   window.ViewCommitments.view(root); break;
       case '/control':   window.ViewControl.view(root); break;
+      case '/oauth':     oauthCallback(r.params); break;
       case '/tasks':     taskModal(r.params[0]); break;
       case '/contacts':  contactModal(r.params[0]); break;
       case '/documents': documentsModal(r.params[0]); break;

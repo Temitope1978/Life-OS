@@ -1,0 +1,31 @@
+project_id = "lifeos"
+
+[api]
+enabled = true
+
+[db]
+major_version = 15
+
+[db.migrations]
+schema_paths = ["./migrations"]
+seed_paths   = ["./seed.sql"]
+
+# Realtime is off: Phase 4 adds no live sync, and §62 keeps integrations modular.
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+
+[auth]
+# Seed users are inserted directly into auth.users by seed.sql, so email/password
+# sign-in must be enabled for the isolation test to obtain real JWTs.
+enable_signup = true
+enable_email_confirmations = false
+site_url = "https://lifeos.local"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = false
+double_confirm_changes = true
+secure_password_change = true

@@ -26,6 +26,256 @@
     ]);
   }
 
+  function modeChip(mode) {
+    return window.UI.chip(mode,
+      mode === 'execute' ? 'success'
+      : mode === 'approve' ? 'warn'
+      : mode === 'onetouch' ? 'acc'
+      : 'danger');
+  }
+  function riskChip(risk) {
+    return window.UI.chip(risk,
+      risk === 'high' ? 'danger' : risk === 'medium' ? 'warn' : 'muted');
+  }
+
+  /* One-touch templates: single-use authorizations the user can
+     create, inspect and revoke. Mirrors the hard rule that no
+     permanent auto-send can ever be set up. */
+  function oneTouchSection() {
+    var templates = window.Store.mutable().oneTouchTemplates;
+
+    var name = el('input.input', { type: 'text', placeholder: 'e.g. ABC invoice acknowledgment' });
+    var useCase = el('input.input', { type: 'text', placeholder: 'e.g. Confirm receipt of an ABC Ltd invoice' });
+    var recipients = el('input.input', { type: 'text', placeholder: 'e.g. @abcltd.com or sarah@abcltd.com (comma-separated)' });
+    var conditions = el('input.input', { type: 'text', placeholder: 'e.g. only when the message is an invoice receipt' });
+    var body = el('textarea.textarea', { rows: 4, placeholder: 'Template body…' });
+
+    var list = el('div.stack');
+    function renderList() {
+      window.$.clear(list);
+      if (!templates.length) {
+        list.appendChild(window.UI.empty('✓', 'No one-touch templates. Create one below to allow a single pre-authorized send.'));
+        return;
+      }
+      templates.forEach(function (t) {
+        var stateChip = t.consumed ? window.UI.chip('Used — consumed', 'muted')
+          : t.revoked ? window.UI.chip('Revoked', 'danger')
+          : window.UI.chip('Active — single use', 'warn');
+        list.appendChild(el('div.row.spread', [
+          el('div.grow', [
+            el('div.t', { text: t.name }),
+            el('div.s.faint', { text: t.useCase + ' · To: ' + (t.recipients.join(', ') || 'nobody') }),
+            el('div.s.faint', { text: (t.conditions ? 'When: ' + t.conditions : 'No conditions set') + (t.consumed ? ' · consumed ' + t.consumedAt : '') })
+          ]),
+          el('div.actions', [
+            stateChip,
+            (!t.consumed && !t.revoked) ? window.UI.btnSm('Revoke', 'ghost', function () {
+              window.Store.mut.revokeOneTouchTemplate(t.id);
+              window.UI.toast('One-touch authorization revoked', 'ok');
+              window.App.render();
+            }) : null
+          ].filter(Boolean))
+        ]));
+      });
+    }
+    renderList();
+
+    return section('One-touch email templates', 'Single-use authorizations', [
+      el('div.alert.alert-warn', {
+        html: '<strong>Never permanent.</strong> A one-touch template authorizes exactly ' +
+          '<strong>one</strong> send to a defined recipient set. After that send it is ' +
+          'consumed and normal human approval resumes. There is no way to set up ' +
+          'unrestricted automatic sending.'
+      }),
+      el('div.stack', [
+        el('div.field', [el('label', { text: 'Template name' }), name]),
+        el('div.field', [el('label', { text: 'Use case' }), useCase]),
+        el('div.field', [el('label', { text: 'Permitted recipients' }), recipients]),
+        el('div.field', [el('label', { text: 'Conditions' }), conditions]),
+        el('div.field', [el('label', { text: 'Template body' }), body]),
+        el('button.btn.btn-primary', {
+          type: 'button', text: 'Authorize template (single-use)', onclick: function () {
+            var recips = recipients.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+            if (!name.value.trim()) { window.UI.toast('Give the template a name', 'err'); return; }
+            if (!recips.length) { window.UI.toast('Add at least one permitted recipient', 'err'); return; }
+            if (!body.value.trim()) { window.UI.toast('Add a template body', 'err'); return; }
+            window.Store.mut.createOneTouchTemplate({
+              name: name.value.trim(),
+              useCase: useCase.value.trim(),
+              recipients: recips,
+              conditions: conditions.value.trim(),
+              body: body.value
+            });
+            window.UI.toast('One-touch template authorized (single-use)', 'ok');
+            window.App.render();
+          }
+        }),
+        list
+      ])
+    ]);
+  }
+
+  /* Audit trail of every proposed action and how the authorization
+     layer decided it. */
+  function actionLogSection() {
+    var log = window.Store.actionLog().slice().reverse();
+    var recent = log.slice(0, 12);
+    return section('Action authorization log', 'Every proposed action and its decision', [
+      el('div.s.faint', {
+        text: 'Nothing reaches another person without a decision recorded here. ' +
+              '"approve" means a human approved it; "onetouch" means a single-use ' +
+              'template covered it; "block" means it was refused.'
+      }),
+      (function () {
+        if (!recent.length) return window.UI.empty('✓', 'No actions proposed yet.');
+        var wrap = el('div.stack');
+        recent.forEach(function (a) {
+          wrap.appendChild(el('div.row.spread', [
+            el('div.grow', [
+              el('div.t', { text: a.type.replace(/_/g, ' ') + (a.detail ? ' — ' + a.detail : '') }),
+              el('div.s.faint', { text: a.reason })
+            ]),
+            el('div.actions', [riskChip(a.risk), modeChip(a.mode)])
+          ]));
+        });
+        return wrap;
+      })()
+    ]);
+  }
+
+  /* Providers: the configuration + failure layer that sits in front of
+     every external service. Distinct from the simulated integration
+     health below — this shows the real config status and the §55
+     failure taxonomy. */
+  function providerRow(p) {
+    var st = p.status();
+    var connected = st.config.status === 'CONNECTED';
+    var invalid = st.config.status === 'INVALID_CONFIGURATION';
+    var dot = connected ? 'ok' : invalid ? 'err' : 'warn';
+
+    var configChip = connected ? window.UI.chip('Connected', 'success')
+      : invalid ? window.UI.chip('Invalid configuration', 'danger')
+      : window.UI.chip('Not configured', 'warn');
+
+    var failChip = st.failure ? window.UI.chip(st.failure.replace(/_/g, ' '), 'danger') : null;
+
+    var values = ['none'].concat(Object.keys(window.Providers.FAILURE).map(function (k) {
+      return window.Providers.FAILURE[k];
+    }));
+    var sel = el('select.select', values.map(function (v) {
+      return el('option', { value: v, text: v === 'none' ? 'Simulate state…' : v.replace(/_/g, ' ') });
+    }));
+    sel.value = st.failure || 'none';
+    sel.onchange = function () {
+      var v = sel.value;
+      if (v === 'none') p.clearFailure();
+      else p.simulateFailure(v);
+      window.App.render();
+    };
+
+    return el('div.health-row', [
+      el('span.health-dot.' + dot),
+      el('div.nm', { text: p.name }),
+      el('div.st', [
+        el('div', { text: p.description }),
+        el('div.faint', { text: 'Requires: ' + p.requiredConfig.join(', ') }),
+        el('div', { text: st.message })
+      ]),
+      el('div.actions', [configChip, failChip, sel].filter(Boolean))
+    ]);
+  }
+
+  function providerSection() {
+    var providers = window.Providers.all();
+    var demo = window.Providers.demoMode();
+    return section('Providers', demo ? 'Demo mode — no live providers connected' : 'Live providers', [
+      el('div.alert.alert-info', {
+        html: '<strong>' + (demo ? 'Demo mode.' : 'Live mode.') + '</strong> ' +
+          'Business logic reaches every external provider through one interface. ' +
+          'In demo mode the AI is served by the simulated provider — no external ' +
+          'credentials are required and no live calls are made. Configuration is ' +
+          'read from environment variables and is never hard-coded.'
+      }),
+      el('div.s.faint', {
+        text: 'Configuration status is one of Connected · Not configured · Invalid ' +
+              'configuration. Use the selector on a provider to preview each failure ' +
+              'state (§55) and the safe message shown to the user.'
+      }),
+      providers.map(function (p) { return providerRow(p); })
+    ]);
+  }
+
+  /* Google sign-in: one coherent OAuth architecture for Gmail +
+     Calendar with explicit, granular scopes. Preparation only — no
+     live credentials, no automatic connection. */
+  function oauthConfigRow(label, value) {
+    return el('div.row.spread', [
+      el('div.t', { text: label }),
+      el('div.s', { text: value })
+    ]);
+  }
+
+  function oauthServiceRow(name, state) {
+    var kind = state === 'connected' ? 'success'
+      : state === 'auth_required' ? 'warn'
+      : state === 'not_configured' ? 'muted' : 'danger';
+    return el('div.row.spread', [
+      el('div.t', { text: name }),
+      el('div.actions', [window.UI.chip(state.replace(/_/g, ' '), kind)])
+    ]);
+  }
+
+  function googleSection() {
+    var cfg = window.OAuth.browserConfig();
+    var configured = window.OAuth.isConfigured();
+    var gmailState = window.OAuth.authState('gmail');
+    var calState = window.OAuth.authState('calendar');
+
+    return section('Google sign-in', configured ? 'Configured' : 'Not configured', [
+      el('div.alert.alert-info', {
+        html: '<strong>' + (cfg.mode === 'live' ? 'Live mode.' : 'Demo mode.') + '</strong> ' +
+          'One Google authorization covers Gmail and Calendar. Only the scopes for ' +
+          'the first live test are requested — read-only email intelligence and ' +
+          'calendar read. No send or calendar-write permission is requested. The ' +
+          'Client Secret and every token stay server-side; the browser never holds them.'
+      }),
+      el('div.stack', [
+        oauthConfigRow('Client ID', cfg.clientId ? 'set (' + String(cfg.clientId).length + ' chars)' : 'not set'),
+        oauthConfigRow('Redirect URI', cfg.redirectUri ? cfg.redirectUri : 'not set — never guessed'),
+        oauthConfigRow('Callback route', cfg.callbackRoute),
+        oauthConfigRow('Enabled services', cfg.services.join(', ')),
+        oauthConfigRow('First live test scopes', cfg.firstLiveTestScopes.length ? cfg.firstLiveTestScopes.join(' ') : 'none')
+      ]),
+      el('div.stack', [
+        oauthServiceRow('Gmail', gmailState),
+        oauthServiceRow('Google Calendar', calState)
+      ]),
+      el('div.actions', [
+        window.UI.btnSm('Connect Google', 'primary', function () {
+          var url = window.OAuth.authorizationUrl();
+          if (!url) {
+            window.UI.toast('Google is not configured — add Client ID and redirect URI', 'err');
+            return;
+          }
+          /* Show the exact request that would go to Google. The app does
+             not auto-navigate or auto-connect — the user initiates it. */
+          var m = window.UI.modal({
+            title: 'Google authorization request',
+            body: el('div.stack', [
+              el('div.s.faint', {
+                text: 'In production this URL opens Google\'s consent screen. The ' +
+                      'redirect URI must be registered in Google Cloud Console and ' +
+                      'point to the hosted deployment. No secret appears in this URL.'
+              }),
+              el('div.s', { text: url })
+            ]),
+            actions: [window.UI.btnSm('Close', 'ghost', function () { m.close(); })]
+          });
+        })
+      ])
+    ]);
+  }
+
   function integrationRow(i) {
     var kind = i.status === 'connected' ? 'ok' : (i.status === 'failed' ? 'err' : 'warn');
     var label = i.status === 'connected' ? 'Connected'
@@ -69,8 +319,9 @@
           }),
           el('div.alert.alert-info', {
             html: '<strong>Currently ' + window.$.esc(meta.label) + '.</strong> ' +
-              'Autonomy never overrides a permission. Anything that reaches another person — ' +
-              'email, documents, calendar invites — is held for approval regardless of level.'
+              'Every action passes through the Action Authorization Layer. Autonomy never ' +
+              'overrides a permission, and anything that reaches another person — email, ' +
+              'documents, calendar invites — is held for approval regardless of level.'
           }),
           el('div.s.faint', {
             text: 'Level 4 (Confirm) asks once and remembers. Level 5 (Automate) only ever runs ' +
@@ -97,6 +348,9 @@
           ]);
         })),
 
+        oneTouchSection(),
+        actionLogSection(),
+
         section('Account', null, [
           el('div.row', [
             el('span', {
@@ -116,6 +370,9 @@
                   'Everything you approve is stored in this browser under "lifeos.sim.v1".'
           })
         ]),
+
+        providerSection(),
+        googleSection(),
 
         section('Integrations', failed ? failed + ' need attention' : 'All healthy', integrations.map(integrationRow)),
 

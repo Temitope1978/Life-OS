@@ -27,7 +27,11 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/data/seed.js"></script>
 <script src="assets/js/core/dates.js"></script>
 <script src="assets/js/core/seam.js"></script>
-<script src="assets/js/core/store.js"></script>
+    <script src="assets/js/core/store.js"></script>
+    <script src="assets/js/core/actions.js"></script>
+    <script src="assets/js/core/config.js"></script>
+    <script src="assets/js/core/providers.js"></script>
+    <script src="assets/js/core/oauth.js"></script>
 <script src="assets/js/engines/mail.js"></script>
 <script src="assets/js/engines/commitment.js"></script>
 <script src="assets/js/engines/priority.js"></script>
@@ -265,6 +269,44 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       window.ViewMeetings.openTranscript('m1');
       return document.querySelectorAll('#modal-root textarea').length + ' editable turns';
     });
+    /* Regression: detail-route modals (/tasks, /contacts, /documents)
+       re-opened on Cancel because their onClose re-ran render(), which
+       re-invoked the same detail route. Cancel must close the modal and
+       leave the detail route. */
+    tryRun('cancel closes the task modal', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/tasks/t1';
+      window.App.render();
+      var opened = document.querySelectorAll('#modal-root .modal').length;
+      var cancel = Array.prototype.filter.call(
+        document.querySelectorAll('#modal-root .modal-foot .btn'),
+        function (b) { return b.textContent === 'Cancel'; })[0];
+      if (opened !== 1) return 'expected 1 modal, got ' + opened;
+      if (!cancel) return 'no Cancel button';
+      cancel.click();
+      var stillOpen = document.querySelectorAll('#modal-root .modal').length;
+      var path = window.App.route().path;
+      if (stillOpen) return 'modal still open after Cancel';
+      if (path === '/tasks') return 're-opened: still on /tasks';
+      return 'closed, back on ' + path;
+    });
+    tryRun('cancel closes the document modal', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/documents/d1';
+      window.App.render();
+      var opened = document.querySelectorAll('#modal-root .modal').length;
+      var cancel = Array.prototype.filter.call(
+        document.querySelectorAll('#modal-root .modal-foot .btn'),
+        function (b) { return b.textContent === 'Cancel'; })[0];
+      if (opened !== 1) return 'expected 1 modal, got ' + opened;
+      if (!cancel) return 'no Cancel button';
+      cancel.click();
+      var stillOpen = document.querySelectorAll('#modal-root .modal').length;
+      var path = window.App.route().path;
+      if (stillOpen) return 'modal still open after Cancel';
+      if (path === '/documents') return 're-opened: still on /documents';
+      return 'closed, back on ' + path;
+    });
     tryRun('forget -> create task', function () {
       window.$.clear(document.getElementById('modal-root'));
       var before = window.Store.tasks().length;
@@ -294,6 +336,370 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       window.Store.mut.setAutonomy(3);
       return a + '->' + window.Store.user().autonomy;
     });
+
+    /* Action Authorization Layer (spec §54, §6). Every external send
+       is decided here; one-touch templates are single-use. */
+    tryRun('action authorization layer', function () {
+      var A = window.Actions;
+      if (!A) return 'window.Actions missing';
+      var user = window.Store.user();
+
+      if (A.riskFor('send_external_email') !== 'high') return 'send_external_email must be high risk';
+      if (!A.reachesPerson('send_external_email')) return 'send_external_email reaches a person';
+      if (A.reachesPerson('classify_email')) return 'classify_email does not reach a person';
+
+      var manual = A.decide({ type: 'send_external_email', recipient: 'x@y.com' }, user);
+      if (manual.mode !== 'approve') return 'manual external send must be approve, got ' + manual.mode;
+
+      var unknown = A.decide({ type: 'send_external_email', recipient: 'x@y.com', templateId: 'nope' }, user);
+      if (unknown.mode !== 'block') return 'unknown template must block';
+
+      var dom = { recipients: ['@abcltd.com'] };
+      if (!A.templateMatches('sarah@abcltd.com', dom)) return 'domain must match its addresses';
+      if (A.templateMatches('tom@supplyco.com', dom)) return 'other domain must not match';
+      if (A.templateMatches('a@b.com', { recipients: [] })) return 'empty recipients permit nobody';
+
+      return 'risk, reach, approve, block, match OK';
+    });
+
+    /* One-touch is single-use: a valid unconsumed template plus the
+       granted permission covers exactly one send, then is consumed. */
+    tryRun('one-touch template is single-use', function () {
+      window.Store.mut.allow('Send external email');
+      var tpl = window.Store.mut.createOneTouchTemplate({
+        name: 'ABC receipt acknowledgment',
+        useCase: 'Confirm receipt of an ABC Ltd message',
+        recipients: ['@abcltd.com'],
+        conditions: 'only for ABC Ltd correspondence',
+        body: 'Hi, confirming receipt. — authorized one-touch'
+      });
+      var user = window.Store.user();
+
+      var ok1 = window.Actions.decide({ type: 'send_external_email', recipient: 's.lindqvist@abcltd.com', templateId: tpl.id }, user);
+      if (ok1.mode !== 'onetouch') return 'valid recipient + template must be onetouch, got ' + ok1.mode;
+
+      var bad = window.Actions.decide({ type: 'send_external_email', recipient: 'tom@supplyco.com', templateId: tpl.id }, user);
+      if (bad.mode !== 'block') return 'recipient outside the template must block';
+
+      var res = window.Store.mut.sendEmailAuthorized('m04', 'authorized body', { templateId: tpl.id });
+      if (!res.ok || res.mode !== 'onetouch') return 'one-touch send must succeed, got ' + JSON.stringify(res);
+      if (!window.Store.mut.replySent('m04')) return 'reply must be recorded as sent';
+
+      var after = window.Store.user().oneTouchTemplates.filter(function (t) { return t.id === tpl.id; })[0];
+      if (!after.consumed) return 'template must be consumed after one send';
+
+      var res2 = window.Store.mut.sendEmailAuthorized('m04', 'again', { templateId: tpl.id });
+      if (res2.ok || res2.mode !== 'block') return 'second send with a consumed template must block';
+
+      return 'single-use enforced: send ok, template consumed, resend blocked';
+    });
+
+    /* Manual send: no template, so the layer returns "approve" and the
+       send only happens because the user approved this exact send. */
+    tryRun('manual send requires per-send approval', function () {
+      var decision = window.Store.mut.proposeAction({ type: 'send_external_email', recipient: 'john@abcltd.com' });
+      if (decision.mode !== 'approve') return 'expected approve, got ' + decision.mode;
+      var res = window.Store.mut.sendEmailAuthorized('m01', 'manual approved reply', {});
+      if (!res.ok || res.mode !== 'approve') return 'manual send must succeed in approve mode';
+      if (!window.Store.mut.replySent('m01')) return 'manual reply must be recorded';
+      return 'manual send approved and recorded';
+    });
+
+    ok('action authorization decisions are logged',
+       window.Store.actionLog().length > 0,
+       'log=' + window.Store.actionLog().length + ' entries');
+    ok('one-touch send reached the audit log',
+       window.Store.actionLog().some(function (a) { return a.type === 'send_external_email' && a.mode === 'onetouch'; }));
+    ok('manual send approval is logged',
+       window.Store.actionLog().some(function (a) { return a.type === 'send_external_email' && a.mode === 'approve'; }));
+    ok('consumed one-touch resend was blocked and logged',
+       window.Store.actionLog().some(function (a) { return a.type === 'send_external_email' && a.mode === 'block'; }));
+
+    /* Provider abstraction + environment configuration + failure handling
+       (spec §54, §55). Configuration comes from the environment; with none
+       injected the app runs in DEMO MODE and LLM calls hit the simulated
+       seam. Secrets are never surfaced. */
+    var F = window.Providers.FAILURE;
+
+    ok('config + provider modules loaded',
+       !!window.Config && !!window.Providers && window.Providers.all().length === 4);
+
+    window.Config.load({});
+    ok('demo mode with no config injected',
+       window.Config.isEmpty() && window.Providers.demoMode() &&
+       window.Providers.all().every(function (p) { return p.configStatus().status === 'NOT_CONFIGURED'; }));
+
+    ok('missing credentials => NOT_CONFIGURED',
+       (function () {
+         var r = window.Config.validate(['OPENAI_API_KEY'], { OPENAI_API_KEY: function (v) { return /^sk-/.test(v); } });
+         return r.status === 'NOT_CONFIGURED' && r.missing.indexOf('OPENAI_API_KEY') !== -1;
+       })());
+
+    window.Config.load({ OPENAI_API_KEY: 'not-a-valid-key' });
+    ok('malformed credential => INVALID_CONFIGURATION (key named, value never shown)',
+       (function () {
+         var cs = window.Providers.get('openai').configStatus();
+         return cs.status === 'INVALID_CONFIGURATION' && cs.invalid.indexOf('OPENAI_API_KEY') !== -1;
+       })());
+
+    window.Config.load({ OPENAI_API_KEY: 'sk-' + 'a'.repeat(24) });
+    ok('valid credential => CONNECTED and demo mode off',
+       window.Providers.get('openai').configStatus().status === 'CONNECTED' && !window.Providers.demoMode());
+    ok('config mask never reveals the secret value',
+       window.Config.mask('OPENAI_API_KEY').indexOf('a'.repeat(24)) === -1);
+
+    window.Config.load({
+      GOOGLE_CLIENT_ID: '1234.apps.googleusercontent.com',
+      GOOGLE_CLIENT_SECRET: 'GOCSPX-' + 'b'.repeat(20),
+      GOOGLE_ACCESS_TOKEN: 'ya29.' + 'c'.repeat(20)
+    });
+    ok('google oauth config connects gmail + calendar',
+       window.Providers.get('gmail').configStatus().status === 'CONNECTED' &&
+       window.Providers.get('google_calendar').configStatus().status === 'CONNECTED');
+
+    window.Config.load({ GOOGLE_CLIENT_ID: '1234.apps.googleusercontent.com' });
+    ok('partial google config => INVALID_CONFIGURATION',
+       (function () {
+         var cs = window.Providers.get('gmail').configStatus();
+         return cs.status === 'INVALID_CONFIGURATION' && cs.missing.length === 2;
+       })());
+
+    /* §55 failure taxonomy + safe error handling */
+    var C = window.Providers.classify;
+    ok('failure taxonomy maps raw errors to safe categories',
+       C({ status: 401 }) === F.AUTH_REQUIRED &&
+       C({ status: 403 }) === F.PERMISSION_DENIED &&
+       C({ status: 404 }) === F.INVALID_REQUEST &&
+       C({ status: 429 }) === F.RATE_LIMITED &&
+       C({ status: 503 }) === F.UNAVAILABLE &&
+       C({ message: 'token expired' }) === F.AUTH_EXPIRED &&
+       C({ message: 'invalid_grant' }) === F.AUTH_EXPIRED &&
+       C(null) === F.UNKNOWN);
+
+    ok('all 8 failure states have safe, secret-free messages',
+       (function () {
+         var codes = Object.keys(F).map(function (k) { return F[k]; });
+         if (codes.length !== 8) return false;
+         var secret = 'sk-SUPERSECRETVALUE123456';
+         return codes.every(function (code) {
+           var msg = window.Providers.safeMessage(code);
+           return msg && msg.length >= 5 && msg.indexOf(secret) === -1;
+         });
+       })());
+
+    ok('simulated failure returns a safe message, not the raw error',
+       (function () {
+         var p = window.Providers.get('openai');
+         var raw = 'RawProviderError: quota exceeded for sk-LEAKME1234567890';
+         p.simulateFailure(F.RATE_LIMITED);
+         var res = p.invoke('classifyEmail', { subject: 'x' });
+         p.clearFailure();
+         return !res.ok &&
+                res.error === F.RATE_LIMITED &&
+                res.message === window.Providers.safeMessage(F.RATE_LIMITED) &&
+                res.message.indexOf(raw) === -1 &&
+                res.message.indexOf('LEAKME') === -1;
+       })());
+
+    window.Config.load({});
+    tryRun('mock provider operation: LLM call served by the simulated seam', function () {
+      var p = window.Providers.get('openai');
+      var email = window.Store.emails().filter(function (e) { return e.contactId; })[0];
+      var res = p.invoke('classifyEmail', email);
+      if (!res.ok) throw new Error('demo-mode LLM call failed: ' + res.message);
+      if (res.provider !== 'simulated') throw new Error('expected simulated provider, got ' + res.provider);
+      if (!res.result || !res.result.category) throw new Error('classification result missing a category');
+      return 'mock LLM call routed to the simulated seam: category=' + res.result.category;
+    });
+
+    ok('external provider in demo mode refuses with not_configured',
+       (function () {
+         var res = window.Providers.get('gmail').invoke('send', { to: 'x@y.com' });
+         return !res.ok && res.error === F.NOT_CONFIGURED;
+       })());
+
+    /* Restore the clean demo environment and clear any simulated failures. */
+    window.Config.load({});
+    window.Providers.all().forEach(function (p) { p.clearFailure(); });
+
+    ok('demo mode restored after provider tests',
+       window.Config.isEmpty() && window.Providers.demoMode() &&
+       window.Providers.all().every(function (p) { return p.configStatus().status === 'NOT_CONFIGURED'; }));
+
+    /* The Action Authorization Layer is independent of provider configuration:
+       no provider state may grant permanent autonomous sending. */
+    ok('authorization unchanged: manual external send still needs approval',
+       window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, window.Store.user()).mode === 'approve');
+    ok('authorization unchanged: a connected provider at max autonomy still cannot auto-send',
+       (function () {
+         var u = window.Store.user();
+         var connected = { permissions: u.permissions, autonomy: 5, oneTouchTemplates: [] };
+         return window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, connected).mode === 'approve';
+       })());
+
+    /* Google OAuth structure (Gmail + Calendar). Preparation only —
+       no live credentials, no automatic connection. Non-secret config
+       lives in the browser; the Client Secret and all tokens stay
+       server-side and are never exposed to browser code or storage. */
+    var G = window.OAuth;
+
+    ok('google oauth module loaded',
+       !!G && G.CALLBACK_ROUTE === '#/oauth/google/callback' &&
+       !!G.SERVICES.gmail && !!G.SERVICES.calendar &&
+       G.SERVER_SECRET_KEYS.length >= 5);
+
+    ok('callback route follows the app hash-routing convention',
+       G.CALLBACK_ROUTE.indexOf('#/') === 0 &&
+       G.CALLBACK_ROUTE.split('/').length >= 4);
+
+    /* Demo mode: no Google config injected. */
+    window.Config.load({});
+    ok('oauth not configured in demo mode',
+       !G.isConfigured() && G.authState('gmail') === 'not_configured' &&
+       G.authState('calendar') === 'not_configured');
+    ok('authorization url is never guessed when unconfigured',
+       G.authorizationUrl() === null);
+
+    /* Missing configuration: client id present, redirect uri absent. */
+    window.Config.load({ GOOGLE_CLIENT_ID: '1234.apps.googleusercontent.com' });
+    ok('missing redirect uri => not configured',
+       !G.isConfigured() && G.authorizationUrl() === null);
+
+    /* Invalid configuration: redirect uri present but not a real URL. */
+    window.Config.load({
+      GOOGLE_CLIENT_ID: '1234.apps.googleusercontent.com',
+      GOOGLE_REDIRECT_URI: 'not-a-valid-redirect'
+    });
+    ok('invalid redirect uri => not configured',
+       !G.isConfigured() && !G.validRedirectUri('not-a-valid-redirect') &&
+       G.authorizationUrl() === null);
+
+    /* Redirect uri configured: the authorization URL is built with the
+       correct client id, response type, redirect uri and first-live-test
+       scopes (read-only only — no send, no calendar write). */
+    window.Config.load({
+      GOOGLE_CLIENT_ID: '1234.apps.googleusercontent.com',
+      GOOGLE_REDIRECT_URI: 'https://host/#/oauth/google/callback',
+      GOOGLE_SERVICES: 'gmail,calendar',
+      LIFEOS_MODE: 'live'
+    });
+    var authUrl = G.authorizationUrl();
+    ok('redirect uri configured => authorization url built',
+       G.isConfigured() && typeof authUrl === 'string' && authUrl.indexOf(G.AUTH_ENDPOINT) === 0);
+    ok('authorization url carries non-secret params and read-only scopes',
+       (function () {
+         if (!authUrl) return false;
+         return authUrl.indexOf('client_id=1234.apps.googleusercontent.com') !== -1 &&
+                authUrl.indexOf('response_type=code') !== -1 &&
+                authUrl.indexOf('redirect_uri=') !== -1 &&
+                authUrl.indexOf(encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly')) !== -1 &&
+                authUrl.indexOf(encodeURIComponent('https://www.googleapis.com/auth/calendar.readonly')) !== -1;
+       })());
+    ok('first live test requests read-only scopes only',
+       (function () {
+         var s = G.firstLiveTestScopes();
+         return s.length === 2 &&
+                s.indexOf('https://www.googleapis.com/auth/gmail.readonly') !== -1 &&
+                s.indexOf('https://www.googleapis.com/auth/calendar.readonly') !== -1 &&
+                s.indexOf('https://www.googleapis.com/auth/gmail.send') === -1 &&
+                s.indexOf('https://www.googleapis.com/auth/gmail.modify') === -1 &&
+                s.indexOf('https://www.googleapis.com/auth/calendar.events') === -1;
+       })());
+
+    /* Provider authentication states. */
+    ok('configured but unauthorized => auth_required',
+       G.authState('gmail') === 'auth_required' && G.authState('calendar') === 'auth_required');
+    G.setAuthState('connected');
+    ok('server-reported connected state is surfaced',
+       G.authState('gmail') === 'connected' && G.authState('calendar') === 'connected');
+    G.setAuthState('auth_expired');
+    ok('server-reported expired state is surfaced',
+       G.authState('gmail') === 'auth_expired');
+    G.setAuthState(null);
+    ok('clearing the server state returns to the derived state',
+       G.authState('gmail') === 'auth_required');
+
+    /* Safe OAuth error handling. */
+    ok('oauth errors map to safe, secret-free messages',
+       G.safeOAuthError('access_denied') === window.Providers.safeMessage('permission_denied') &&
+       G.safeOAuthError('invalid_grant') === window.Providers.safeMessage('auth_expired') &&
+       G.safeOAuthError('server_error') === window.Providers.safeMessage('unavailable') &&
+       G.safeOAuthError('bogus_error') === window.Providers.safeMessage('unknown'));
+    ok('oauth error callback never retains the code or token',
+       (function () {
+         var r = G.handleCallback('gmail', '?error=access_denied');
+         return !r.ok && r.error === 'access_denied' &&
+                r.message === window.Providers.safeMessage('permission_denied');
+       })());
+    ok('successful callback acknowledges the code without exposing it',
+       (function () {
+         var r = G.handleCallback('gmail', '?code=SECRETCODE123&state=xyz');
+         return r.ok && r.hasCode === true &&
+                r.message.indexOf('SECRETCODE123') === -1 &&
+                r.detail.indexOf('SECRETCODE123') === -1;
+       })());
+    ok('callback with no code reports a safe message',
+       (function () {
+         var r = G.handleCallback('gmail', '');
+         return !r.ok && !r.hasCode;
+       })());
+    ok('token exchange is a server-only operation',
+       G.exchangeCodeServerSide().serverOnly === true);
+
+    /* Secrets cannot be accessed from browser code. */
+    ok('server-side secrets are classified and absent from the browser',
+       (function () {
+         var audit = G.secretAudit();
+         var secretKeysAbsent = G.SERVER_SECRET_KEYS.every(function (k) {
+           return audit.browserExposure[k] === false && !window.Config.has(k);
+         });
+         return audit.safe === true && secretKeysAbsent &&
+                G.isSecretKey('GOOGLE_CLIENT_SECRET') === true &&
+                G.isSecretKey('GOOGLE_CLIENT_ID') === false &&
+                window.Config.get('GOOGLE_CLIENT_SECRET') === null &&
+                window.Config.get('GOOGLE_ACCESS_TOKEN') === null &&
+                window.Config.get('GOOGLE_REFRESH_TOKEN') === null;
+       })());
+
+    /* Tokens are never written to localStorage or sessionStorage. */
+    ok('no token/secret is written to localStorage or sessionStorage',
+       (function () {
+         /* Exercise the OAuth flow first. */
+         G.authorizationUrl();
+         G.handleCallback('gmail', '?code=ABC123&state=xyz');
+         G.setAuthState('connected');
+         var pattern = /token|secret|access|refresh|credential/i;
+         var bad = [];
+         for (var i = 0; i < window.localStorage.length; i++) {
+           var k = window.localStorage.key(i);
+           if (pattern.test(k)) bad.push('localStorage:' + k);
+         }
+         for (var j = 0; j < window.sessionStorage.length; j++) {
+           var sk = window.sessionStorage.key(j);
+           if (pattern.test(sk)) bad.push('sessionStorage:' + sk);
+         }
+         return bad.length === 0;
+       })(),
+       'scanned localStorage and sessionStorage for token/secret keys');
+
+    /* The /oauth callback route renders without error. */
+    tryRun('oauth callback route renders', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/oauth/google/callback';
+      window.App.render();
+      var txt = document.getElementById('view').textContent;
+      if (/undefined|\[object Object\]/.test(txt)) throw new Error('route leaked undefined or a stringified object');
+      return 'callback route rendered: ' + (txt.indexOf('Connecting Google') !== -1 ? 'Connecting Google' : 'rendered');
+    });
+
+    /* The Action Authorization Layer is untouched by the OAuth layer. */
+    ok('authorization unchanged after oauth: manual external send still needs approval',
+       window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, window.Store.user()).mode === 'approve');
+
+    /* Restore the clean demo environment. */
+    window.Config.load({});
+    G.setAuthState(null);
+
     ok('user decisions persist to storage',
        String(window.localStorage.getItem('lifeos.sim.v1')).indexOf('followUpStatus') !== -1);
     /* mut.reset() reloads the page, so verify the same effect the way the app

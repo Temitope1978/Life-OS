@@ -92,9 +92,13 @@
           window.UI.toast('Marked safe — it will be triaged normally', 'ok');
         })
       ] : [
-        window.UI.btnSm('Reply', 'primary', function () {
-          draftFor(e, r);
-        }),
+        /* Send-once: once an AI-drafted reply has been sent, the
+           thread shows a sent state instead of offering another send. */
+        window.Store.mut.replySent(e.id)
+          ? window.UI.chip('Reply sent', 'success')
+          : window.UI.btnSm('Reply', 'primary', function () {
+              draftFor(e, r);
+            }),
         window.UI.btnSm('Add task', 'secondary', function () {
           window.Store.mut.addTask({
             title: 'Reply: ' + e.subject,
@@ -106,38 +110,90 @@
           });
           window.UI.toast('Task added from email');
         })
-      ])
+      ].filter(Boolean))
     ]));
 
     return wrap;
   }
 
+  function recipientOf(e) {
+    var c = e.contactId ? window.Store.contact(e.contactId) : null;
+    return c ? (c.email || c.name) : (e.external || '');
+  }
+
+  /** A one-touch template the user has authorized for this recipient,
+      if (and only if) the "Send external email" permission is granted. */
+  function matchingOneTouch(e) {
+    var u = window.Store.user();
+    if ((u.permissions || []).indexOf('Send external email') === -1) return null;
+    var recipient = recipientOf(e);
+    var templates = window.Store.oneTouchTemplates();
+    for (var i = 0; i < templates.length; i++) {
+      if (window.Actions.templateMatches(recipient, templates[i])) return templates[i];
+    }
+    return null;
+  }
+
   function draftFor(e, r) {
     var p = e.contactId ? window.Store.contact(e.contactId) : null;
     var name = p ? p.name.split(' ')[0] : 'there';
-    var body = el('textarea.textarea', {
-      rows: 7,
-      value: 'Hi ' + name + ',\n\nThanks for this. I have it and I will come back to you by ' +
-             window.D.formatDate(window.D.addDays(window.D.today(), 1)) + '.\n\nBest,\n' + window.Store.user().name
-    });
-    var m = window.UI.modal({
-      title: 'Reply: ' + e.subject,
-      body: el('div.stack', [
-        el('div.s.faint', { text: 'Drafted by AI. Nothing is sent until you send it.' }),
-        body,
-        el('div.s.faint', { text: 'Autonomy level: ' + window.UI.autonomyMeta(window.Store.user().autonomy).label +
-          ' — you are sending this manually.' })
-      ]),
-      actions: [
+    var recipient = recipientOf(e);
+    var manualBody = 'Hi ' + name + ',\n\nThanks for this. I have it and I will come back to you by ' +
+      window.D.formatDate(window.D.addDays(window.D.today(), 1)) + '.\n\nBest,\n' + window.Store.user().name;
+    var tpl = matchingOneTouch(e);
+    var body = el('textarea.textarea', { rows: 7, value: tpl ? tpl.body : manualBody });
+
+    var note, actions;
+    if (tpl) {
+      note = el('div.alert.alert-info', {
+        html: '<strong>One-touch authorized.</strong> Template "' + window.$.esc(tpl.name) +
+          '" (' + window.$.esc(tpl.useCase) + ') covers ' + window.$.esc(recipient) +
+          '. One tap sends it, and the single-use authorization is then consumed — ' +
+          'the next reply needs your approval again.'
+      });
+      actions = [
         el('button.btn.btn-primary', {
-          type: 'button', text: 'Send reply', onclick: function () {
-            window.Store.mut.sendEmail(e.id, body.value);
+          type: 'button', text: 'Send now — one-touch', onclick: function () {
+            var res = window.Store.mut.sendEmailAuthorized(e.id, body.value, { templateId: tpl.id });
+            if (!res.ok) { window.UI.toast('Blocked: ' + res.reason, 'err'); return; }
+            m.close();
+            window.UI.toast('Sent via one-touch. Authorization consumed.', 'ok');
+            window.App.render();
+          }
+        }),
+        el('button.btn.btn-secondary', {
+          type: 'button', text: 'Send after review', onclick: function () {
+            var res = window.Store.mut.sendEmailAuthorized(e.id, body.value, {});
+            if (!res.ok) { window.UI.toast('Blocked: ' + res.reason, 'err'); return; }
             m.close();
             window.UI.toast('Reply sent to ' + (p ? p.name : e.external));
             window.App.render();
           }
         })
-      ]
+      ];
+    } else {
+      note = el('div.s.faint', {
+        text: 'Drafted by AI. Nothing is sent until you send it. Autonomy level: ' +
+          window.UI.autonomyMeta(window.Store.user().autonomy).label +
+          ' — you are sending this manually.'
+      });
+      actions = [
+        el('button.btn.btn-primary', {
+          type: 'button', text: 'Send reply', onclick: function () {
+            var res = window.Store.mut.sendEmailAuthorized(e.id, body.value, {});
+            if (!res.ok) { window.UI.toast('Blocked: ' + res.reason, 'err'); return; }
+            m.close();
+            window.UI.toast('Reply sent to ' + (p ? p.name : e.external));
+            window.App.render();
+          }
+        })
+      ];
+    }
+
+    var m = window.UI.modal({
+      title: 'Reply: ' + e.subject,
+      body: el('div.stack', [note, body]),
+      actions: actions
     });
   }
 

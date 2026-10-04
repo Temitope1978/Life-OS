@@ -28,6 +28,9 @@
       followUpLog: [],        /* follow-up actions taken                             */
       docDone: {},            /* id -> true                                          */
       integrationStatus: {},  /* id -> { status }                                    */
+      oneTouchTemplates: [],  /* [{ id, name, useCase, body, recipients[],
+                                   conditions, createdAt, consumed, revoked }] */
+      actionLog: [],          /* [{ id, at, type, risk, mode, reason, detail }]    */
       permissions: [
         'Read email', 'Read calendar', 'Read documents',
         'Create tasks', 'Draft replies', 'Transcribe meetings'
@@ -200,7 +203,29 @@
     u.autonomy = state.mutable.autonomy;
     u.learnedPrefs = seed().user.learnedPrefs.concat(state.mutable.learnedPrefs);
     u.permissions = state.mutable.permissions.slice();
+    u.oneTouchTemplates = state.mutable.oneTouchTemplates.map(function (t) {
+      var c = {}; Object.keys(t).forEach(function (k) { c[k] = t[k]; });
+      c.recipients = (t.recipients || []).slice();
+      return c;
+    });
     return u;
+  }
+
+  /** Active (not consumed, not revoked) one-touch templates */
+  function oneTouchTemplates() {
+    return state.mutable.oneTouchTemplates
+      .filter(function (t) { return !t.consumed && !t.revoked; })
+      .map(function (t) {
+        var c = {}; Object.keys(t).forEach(function (k) { c[k] = t[k]; });
+        c.recipients = (t.recipients || []).slice();
+        return c;
+      });
+  }
+  function actionLog() {
+    return state.mutable.actionLog.map(function (e) {
+      var c = {}; Object.keys(e).forEach(function (k) { c[k] = e[k]; });
+      return c;
+    });
   }
 
   /** Resolve a source ref to a human label + object */
@@ -230,6 +255,23 @@
     return (prefix || 'x') + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   }
 
+  /** Append an authorization decision to the audit log. */
+  function logAction(action, decision, detail) {
+    state.mutable.actionLog.push({
+      id: uid('act'),
+      at: window.D.today(),
+      type: action.type,
+      risk: window.Actions ? window.Actions.riskFor(action.type) : 'medium',
+      mode: decision.mode,
+      reason: decision.reason,
+      detail: detail || null
+    });
+    /* keep the log bounded */
+    if (state.mutable.actionLog.length > 200) {
+      state.mutable.actionLog = state.mutable.actionLog.slice(-200);
+    }
+  }
+
   var mut = {
     setAutonomy: function (level) {
       state.mutable.autonomy = level; commit();
@@ -254,6 +296,82 @@
       commit();
     },
     replySent: function (id) { return state.mutable.repliesSent[id] || null; },
+    /**
+     * The single enforcement point for sending external email
+     * (spec §6, §54). Runs the Action Authorization Layer and only
+     * sends when the decision permits it.
+     *
+     *   approve  — the user has approved THIS send (the "Send" click)
+     *   onetouch — a valid single-use template covers it; the
+     *              authorization is consumed by this send
+     *   block    — refuse; nothing is sent
+     */
+    sendEmailAuthorized: function (id, body, opts) {
+      var e = email(id);
+      if (!e) return { ok: false, mode: 'block', reason: 'Unknown message.' };
+      if (mut.isScam(id)) {
+        return { ok: false, mode: 'block', reason: 'This message is held as suspicious and can never be replied to automatically.' };
+      }
+      var c = e.contactId ? contact(e.contactId) : null;
+      var recipient = c ? (c.email || c.name) : (e.external || '');
+      var action = {
+        type: 'send_external_email',
+        recipient: recipient,
+        templateId: (opts && opts.templateId) || null
+      };
+      var decision = window.Actions.decide(action, user());
+      logAction(action, decision, e.subject);
+      if (decision.mode === 'block') {
+        return { ok: false, mode: 'block', reason: decision.reason };
+      }
+      if (decision.mode === 'onetouch') {
+        var tpl = null;
+        for (var i = 0; i < state.mutable.oneTouchTemplates.length; i++) {
+          if (state.mutable.oneTouchTemplates[i].id === action.templateId) {
+            tpl = state.mutable.oneTouchTemplates[i]; break;
+          }
+        }
+        if (tpl) { tpl.consumed = true; tpl.consumedAt = window.D.today(); }
+        mut.sendEmail(id, body);
+        return { ok: true, mode: 'onetouch', consumedTemplate: action.templateId };
+      }
+      /* approve mode: the user approved this exact send */
+      mut.sendEmail(id, body);
+      return { ok: true, mode: 'approve' };
+    },
+    /** Ask the authorization layer whether an action may proceed.
+        A pure query — it records nothing. Only the enforcement
+        points (e.g. sendEmailAuthorized) write to the audit log. */
+    proposeAction: function (action) {
+      return window.Actions.decide(action, user());
+    },
+    createOneTouchTemplate: function (tpl) {
+      var t = {
+        id: uid('ot'),
+        name: tpl.name || 'Untitled template',
+        useCase: tpl.useCase || '',
+        body: tpl.body || '',
+        recipients: (tpl.recipients || []).slice(),
+        conditions: tpl.conditions || '',
+        createdAt: window.D.today(),
+        consumed: false,
+        consumedAt: null,
+        revoked: false
+      };
+      state.mutable.oneTouchTemplates.unshift(t);
+      commit();
+      return t;
+    },
+    revokeOneTouchTemplate: function (id) {
+      for (var i = 0; i < state.mutable.oneTouchTemplates.length; i++) {
+        if (state.mutable.oneTouchTemplates[i].id === id) {
+          state.mutable.oneTouchTemplates[i].revoked = true;
+          commit();
+          return true;
+        }
+      }
+      return false;
+    },
     setEventPrep: function (id) { state.mutable.eventPrep[id] = true; commit(); },
     setMeetingPrep: function (id) {
       var st = state.mutable.meetingStates[id] || {};
@@ -414,6 +532,8 @@
     emails: emails, email: email,
     documents: documents, document: document,
     integrations: integrations,
+    oneTouchTemplates: oneTouchTemplates,
+    actionLog: actionLog,
     user: user,
     resolveSource: resolveSource,
     today: function () { return window.D.today(); },
