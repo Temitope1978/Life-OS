@@ -7,10 +7,15 @@
   var el = function () { return window.$.el.apply(null, arguments); };
 
   function greeting() {
-    var h = new Date().getHours();
+    var h = window.D.realNow().getHours();
     var u = window.Store.user();
     var part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-    return { text: part + ', ' + u.name, sub: window.D.formatLong(window.D.today()) + ' · ' + u.timezone.replace(/_/g, ' ') };
+    var tz = window.D.timeZoneLabel() || window.D.timeZone();
+    return {
+      text: part + ', ' + u.name,
+      sub: window.D.realDayName() + ', ' + window.D.realDateLong() + ' · ' +
+           window.D.localTime() + ' · ' + tz
+    };
   }
 
   function statCard(n, label, kind, ref) {
@@ -142,14 +147,19 @@
     if (!list.length) return null;
     var body = el('div.card-pad');
     list.forEach(function (r) {
-      body.appendChild(el('div.item', [
+      var row = el('div.item.click', [
         el('span.dot.mid'),
         el('div.grow', [
           el('div.t', { text: r.title }),
           el('div.s', { text: r.context })
         ]),
         el('div.actions', [window.UI.sourceBtn(r.source)])
-      ]));
+      ]);
+      row.addEventListener('click', function (e) {
+        if (e.target.closest('.actions')) return;
+        window.Details.open({ kind: 'reminder', ref: r.id });
+      });
+      body.appendChild(row);
     });
     return el('div.card', [
       el('div.card-head', [el('h2', { text: 'Reminders' })]),
@@ -184,8 +194,16 @@
     var briefing = window.EnginesBriefing.build();
 
     root.appendChild(el('div.page-head', [
-      el('h1', { text: g.text }),
-      el('div.sub', { text: g.sub })
+      el('div.row.between', [
+        el('div', [
+          el('h1', { text: g.text }),
+          el('div.sub', { text: g.sub })
+        ]),
+        el('button.btn.btn-primary', {
+          type: 'button', text: '+ Add action',
+          onclick: function () { window.Details.createAction(); }
+        })
+      ])
     ]));
 
     root.appendChild(window.UI.commandBar(function (q) { window.App.runCommand(q); }));

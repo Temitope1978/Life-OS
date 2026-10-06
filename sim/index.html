@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Life OS — Simulation</title>
+<link rel="icon" type="image/png" href="assets/images/life-os-logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
@@ -15,7 +16,10 @@
 
   <!-- ============ Sidebar ============ -->
   <nav class="sidebar">
-    <div class="brand">LIFE OS<small>AI executive assistant</small></div>
+    <div class="brand">
+      <img class="brand-logo" src="assets/images/life-os-logo.png" alt="Life OS logo">
+      <span class="brand-text">LIFE OS<small>AI executive assistant</small></span>
+    </div>
 
     <div class="navlabel">Daily</div>
     <a href="#/command"  data-nav="command"><span class="ic">◈</span> Command Center</a>
@@ -60,6 +64,7 @@
     <script src="assets/js/core/config.js"></script>
     <script src="assets/js/core/providers.js"></script>
     <script src="assets/js/core/oauth.js"></script>
+    <script src="assets/js/core/demo-auth.js"></script>
 
     <!-- ============ Engines ============ -->
 <script src="assets/js/engines/mail.js"></script>
@@ -73,8 +78,9 @@
 
 <!-- ============ UI ============ -->
 <script src="assets/js/ui/dom.js"></script>
-<script src="assets/js/ui/components.js"></script>
-<script src="assets/js/ui/views/command.js"></script>
+    <script src="assets/js/ui/components.js"></script>
+    <script src="assets/js/core/details.js"></script>
+    <script src="assets/js/ui/views/command.js"></script>
 <script src="assets/js/ui/views/day.js"></script>
 <script src="assets/js/ui/views/mail.js"></script>
 <script src="assets/js/ui/views/calendar.js"></script>
@@ -83,6 +89,7 @@
 <script src="assets/js/ui/views/search.js"></script>
 <script src="assets/js/ui/views/commitments.js"></script>
 <script src="assets/js/ui/views/control.js"></script>
+<script src="assets/js/ui/views/auth.js"></script>
 <script src="assets/js/app.js"></script>
 
 </body>

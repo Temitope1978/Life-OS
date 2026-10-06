@@ -84,9 +84,14 @@
       if (ov.deleted) return;
       var copy = {};
       Object.keys(t).forEach(function (k) { copy[k] = t[k]; });
+      if (ov.title !== undefined) copy.title = ov.title;
       if (ov.status) copy.status = ov.status;
       if (ov.dueDate !== undefined) copy.dueDate = ov.dueDate;
+      if (ov.dueTime !== undefined) copy.dueTime = ov.dueTime;
+      if (ov.description !== undefined) copy.description = ov.description;
+      if (ov.reminder !== undefined) copy.reminder = ov.reminder;
       if (ov.priority) copy.priority = ov.priority;
+      if (ov.project !== undefined) copy.project = ov.project;
       out.push(copy);
     });
     state.mutable.newTasks.forEach(function (t) { out.push(t); });
@@ -385,6 +390,16 @@
     },
     saveTranscript: function (id, turns) { mut.updateTranscript(id, turns); },
     updateTask: function (id, patch) {
+      /* User-created tasks live in newTasks — edit them in place
+         (the override layer only applies to seed tasks). */
+      var nt = state.mutable.newTasks;
+      for (var i = 0; i < nt.length; i++) {
+        if (nt[i].id === id) {
+          Object.keys(patch).forEach(function (k) { nt[i][k] = patch[k]; });
+          commit();
+          return;
+        }
+      }
       var ov = state.mutable.taskOverrides[id] || {};
       Object.keys(patch).forEach(function (k) { ov[k] = patch[k]; });
       state.mutable.taskOverrides[id] = ov; commit();
@@ -395,6 +410,9 @@
         title: task.title,
         status: task.status || 'Inbox',
         dueDate: task.dueDate || null,
+        dueTime: task.dueTime || null,
+        description: task.description || null,
+        reminder: task.reminder || null,
         priority: task.priority || 'medium',
         source: task.source || null,
         contactId: task.contactId || null,

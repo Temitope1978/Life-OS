@@ -19,6 +19,12 @@
     location.hash = hash;
   }
 
+  /* Authentication / landing routes render as a clean,
+     standalone experience without the authenticated
+     application shell (sidebar, navigation, badges). */
+  var AUTH_SHELL_ROUTES = { '/welcome': true, '/signin': true, '/signup': true };
+  function isAuthShellRoute(path) { return !!AUTH_SHELL_ROUTES[path]; }
+
   /* ---------- Modal close routing ----------
      Detail routes (/tasks/:id, /contacts/:id, /documents/:id) render a
      modal. Their onClose must navigate back to the previous non-modal
@@ -35,67 +41,12 @@
   }
 
   /* ---------- Modals for detail routes ---------- */
+  /* Task detail — full content via the reusable Details modal,
+     with manual editing in the action form. */
   function taskModal(id) {
     var t = window.Store.task(id);
     if (!t) { window.UI.toast('Task not found', 'err'); return; }
-    var r = window.EnginesPriority.scoreTask(t);
-    var b = window.EnginesTasks.blocker(t);
-    var p = t.contactId ? window.Store.contact(t.contactId) : null;
-    var person = b ? b.person : p;
-
-    var statusSel = el('select.select', window.EnginesTasks.STATES.map(function (s) {
-      return el('option', { value: s, text: s, selected: t.status === s });
-    }));
-    var dateInput = el('input.input', { type: 'date', value: t.dueDate || '' });
-
-    var body = el('div.stack', [
-      el('div.row', [
-        window.UI.chip(r.band + ' priority · ' + r.score + ' pts', r.band === 'high' ? 'danger' : r.band === 'medium' ? 'warn' : 'muted'),
-        window.UI.chip(t.project || 'No project', 'muted'),
-        t.userCreated ? window.UI.chip('Created by you', 'acc') : null
-      ]),
-      el('div.why', { html: '<strong>Why this ranks here:</strong> ' + esc(window.EnginesPriority.explain(t)) }),
-      window.UI.whyPanel('This task came from ' + (t.source ? esc(window.Store.resolveSource(t.source).label) : 'you directly') + '.', t.source),
-      b ? el('div.alert.alert-warn', {
-        html: '<strong>Blocked.</strong> ' + esc(window.EnginesTasks.dependencyInsight(t).text) +
-              ' <em>' + esc(window.EnginesTasks.dependencyInsight(t).suggestion) + '</em>'
-      }) : null,
-      el('div.two-col', [
-        el('div.field', [el('label', { text: 'Status' }), statusSel]),
-        el('div.field', [el('label', { text: 'Due date' }), dateInput])
-      ]),
-      el('div.field', [
-        el('label', { text: 'Move to' }),
-        el('div.row', [
-          person ? window.UI.btnSm('Waiting on ' + person.name.split(' ')[0], 'secondary', function () {
-            window.Store.mut.updateTask(t.id, { status: 'Waiting' });
-            m.close(); window.UI.toast('Moved to Waiting', 'ok'); render();
-          }) : null,
-          window.UI.btnSm('In Progress', 'secondary', function () {
-            window.Store.mut.updateTask(t.id, { status: 'In Progress' });
-            m.close(); window.UI.toast('Moved to In Progress', 'ok'); render();
-          }),
-          window.UI.btnSm('Completed', 'primary', function () {
-            window.Store.mut.updateTask(t.id, { status: 'Completed' });
-            m.close(); window.UI.toast('Completed', 'ok'); render();
-          })
-        ].filter(Boolean))
-      ])
-    ].filter(Boolean));
-
-    var m = window.UI.modal({
-      title: t.title,
-      body: body,
-      actions: [
-        el('button.btn.btn-primary', {
-          type: 'button', text: 'Save changes', onclick: function () {
-            window.Store.mut.updateTask(t.id, { status: statusSel.value, dueDate: dateInput.value || null });
-            m.close(); window.UI.toast('Task updated', 'ok'); render();
-          }
-        })
-      ],
-      onClose: closeModalToBase
-    });
+    window.Details.open({ kind: 'task', ref: id }, { onClose: closeModalToBase });
   }
 
   function contactModal(id) {
@@ -317,7 +268,29 @@
     var root = document.getElementById('view');
     window.$.clear(root);
 
+    /* Demo session gate (assessment-safe). Public routes and the
+       OAuth callback stay open; every app route requires a demo
+       session. #/command is kept valid — it redirects to #/signin
+       when unsigned in and opens the existing Command Center,
+       unchanged, when signed in. */
+    if (!window.DemoAuth.requireAuth(r.path)) {
+      go('#/signin');
+      return;
+    }
+
+    /* Route-aware application shell: the authentication /
+       landing routes render as a clean, standalone
+       experience without the authenticated sidebar; every
+       app route keeps the normal shell and side navigation. */
+    var shell = document.querySelector('.shell');
+    if (shell) {
+      shell.classList.toggle('is-auth', isAuthShellRoute(r.path));
+    }
+
     switch (r.path) {
+      case '/welcome':   window.ViewAuth.welcome(root); break;
+      case '/signin':    window.ViewAuth.signIn(root); break;
+      case '/signup':    window.ViewAuth.signUp(root); break;
       case '/day':       window.ViewDay.view(root); break;
       case '/mail':      window.ViewMail.view(root); break;
       case '/calendar':  window.ViewCalendar.view(root); break;
@@ -354,7 +327,7 @@
     window.Store.subscribe(function () { render(); });
 
     window.addEventListener('hashchange', render);
-    if (!location.hash) location.hash = '#/command';
+    if (!location.hash) location.hash = window.DemoAuth.isSignedIn() ? '#/command' : '#/welcome';
     render();
 
     document.addEventListener('keydown', function (e) {
@@ -370,6 +343,7 @@
     go: go,
     render: render,
     route: parseHash,
+    isAuthShellRoute: isAuthShellRoute,
     runCommand: runCommand,
     openSource: openSource,
     openEventBrief: openEventBrief,

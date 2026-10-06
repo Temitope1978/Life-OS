@@ -19,7 +19,7 @@
 
   function meetingLine(e) {
     var prep = e.prep && !e.prepDone;
-    return el('div.item.click', [
+    var row = el('div.item.click', [
       el('span.dot.' + (prep ? 'mid' : 'neutral')),
       el('div.grow', [
         el('div.t', { text: e.start + '–' + e.end + ' · ' + e.title }),
@@ -33,6 +33,11 @@
         window.UI.btnSm('Prepare', 'ghost', function () { window.App.openEventBrief(e.id); })
       ] : [])
     ]);
+    row.addEventListener('click', function (ev) {
+      if (ev.target.closest('.actions')) return;
+      window.Details.open({ kind: 'event', ref: e.id });
+    });
+    return row;
   }
 
   function view(root) {
@@ -49,6 +54,12 @@
     });
 
     root.appendChild(window.UI.page('My Day', window.D.formatLong(window.D.today()), el('div.stack', [
+      el('div.actions', [
+        el('button.btn.btn-primary.btn-sm', {
+          type: 'button', text: '+ Add action',
+          onclick: function () { window.Details.createAction(); }
+        })
+      ]),
       section('Meetings', todayEvents.length + ' today', todayEvents.map(meetingLine)),
       section('Overdue tasks', 'These are past their due date', overdue.map(function (t) {
         var r = window.EnginesPriority.scoreTask(t);

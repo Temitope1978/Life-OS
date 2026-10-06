@@ -19,7 +19,7 @@
             el('span.hint', { text: 'Nothing is deleted — everything stays traceable' })
           ]),
         el('div.card-pad.stack', list.length ? list.map(function (f) {
-          return el('div.item', [
+          var row = el('div.item', [
             el('span.dot.' + (f.confidence === 'high' ? 'hi' : f.confidence === 'medium' ? 'mid' : 'lo')),
             el('div.grow', [
               el('div.t', { text: f.title }),
@@ -40,6 +40,12 @@
               }) : null
             ])
           ]);
+          row.classList.add('click');
+          row.addEventListener('click', function (e) {
+            if (e.target.closest('.actions')) return;
+            window.Details.open({ kind: 'forgetting', ref: f.id });
+          });
+          return row;
         }) : [window.UI.empty('✓', 'Nothing has been forgotten', 'All commitments and deadlines are tracked.')])
         ]),
         el('div.card', [

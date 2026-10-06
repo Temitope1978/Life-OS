@@ -6,6 +6,19 @@
 
   var el = function () { return window.$.el.apply(null, arguments); };
 
+  function openCommitment(id) { window.Details.open({ kind: 'commitment', ref: id }); }
+  function openFollowUp(id) { window.Details.open({ kind: 'followup', ref: id }); }
+
+  /* Make a row open its full detail, ignoring clicks on its action buttons. */
+  function clickable(row, onclick) {
+    row.classList.add('click');
+    row.addEventListener('click', function (e) {
+      if (e.target.closest('.actions')) return;
+      onclick();
+    });
+    return row;
+  }
+
   function view(root) {
     var route = window.App.route();
     var tab = route.path === '/waiting' ? 'waiting' : 'commitments';
@@ -42,7 +55,7 @@
           el('span.hint', { text: 'Every item traces back to its source' })
         ]),
         el('div.card-pad.stack', userOwed.length ? userOwed.map(function (k) {
-          return window.UI.commitmentRow(k, {
+          return clickable(window.UI.commitmentRow(k, {
             actions: [
               k.confirmedByUser
                 ? window.UI.btnSm('Unconfirm', 'ghost', function () {
@@ -67,14 +80,16 @@
                 window.App.render();
               }) : null
             ].filter(Boolean)
-          });
+          }), function () { openCommitment(k.id); });
         }) : [window.UI.empty('✓', 'No outstanding promises')])
       ]));
 
       body.appendChild(el('div.card', [
         el('div.card-head', [el('h2', { text: 'They promised you' }), el('span.hint', { text: othersOwed.length + ' items' })]),
         el('div.card-pad.stack', othersOwed.length ? othersOwed.map(function (x) {
-          return window.UI.commitmentRow(x.commitment);
+          return clickable(window.UI.commitmentRow(x.commitment), function () {
+            openCommitment(x.commitment.id);
+          });
         }) : [window.UI.empty('✓', 'You are not waiting on anyone')])
       ]));
     } else {
@@ -89,7 +104,7 @@
       body.appendChild(el('div.card', [
         el('div.card-head', [el('h2', { text: 'Waiting for' }), el('span.hint', { text: othersOwed.length + ' commitments from other people' })]),
         el('div.card-pad.stack', othersOwed.length ? othersOwed.map(function (x) {
-          var row = window.UI.commitmentRow(x.commitment, {
+          var row = clickable(window.UI.commitmentRow(x.commitment, {
             actions: [
               x.overdue ? window.UI.chip('Overdue ' + x.daysOverdue + 'd', 'danger') : null,
               window.UI.btnSm('Follow up', 'primary', function () {
@@ -98,7 +113,7 @@
                 window.App.render();
               })
             ].filter(Boolean)
-          });
+          }), function () { openCommitment(x.commitment.id); });
           return el('div', [row]);
         }) : [window.UI.empty('✓', 'Not waiting on anyone', 'Every commitment you are tracking has an answer.')])
       ]));
@@ -106,7 +121,7 @@
       body.appendChild(el('div.card', [
         el('div.card-head', [el('h2', { text: 'Active follow-ups' })]),
         el('div.card-pad.stack', openFollowUps.length ? openFollowUps.map(function (f) {
-          return el('div.item', [
+          var row = el('div.item', [
             el('span.dot.' + (f.derived === 'followup_due' ? 'hi' : 'mid')),
             el('div.grow', [
               el('div.t', { text: f.subject }),
@@ -122,6 +137,7 @@
               })
             ])
           ]);
+          return clickable(row, function () { openFollowUp(f.id); });
         }) : [window.UI.empty('✓', 'No follow-ups open')])
       ]));
     }

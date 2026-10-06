@@ -101,6 +101,16 @@
     });
   }
 
+  /** Tasks due on a given date, ordered by due time (nulls first). */
+  function tasksFor(date) {
+    return window.Store.tasks().filter(function (t) {
+      return t.dueDate && t.dueDate === date && t.status !== 'Completed' && t.status !== 'Cancelled';
+    }).sort(function (a, b) {
+      var at = a.dueTime || '', bt = b.dueTime || '';
+      return at.localeCompare(bt);
+    });
+  }
+
   /** Reminders due (simulated clock: today's reminders). */
   function remindersDue() {
     return window.SEED.reminders.filter(function (r) {
@@ -120,6 +130,7 @@
     needsPrep: needsPrep,
     conflicts: conflicts,
     tasksFromEmail: tasksFromEmail,
+    tasksFor: tasksFor,
     remindersDue: remindersDue
   };
 })();

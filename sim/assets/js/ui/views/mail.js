@@ -54,6 +54,9 @@
           el('h2', { text: e.subject, style: { marginBottom: '4px' } }),
           el('div.sub', {
             text: (c ? c.name + ' · ' + c.org : e.external) + ' · ' + window.D.formatDateTime(e.received)
+          }),
+          el('div.s.faint', {
+            text: 'To: ' + window.Store.user().name + ' (' + window.Store.user().email + ') · no attachments'
           })
         ]),
         el('div.actions', [window.UI.categoryChip(r.category), window.UI.btnSm('Close', 'ghost', onClose)])

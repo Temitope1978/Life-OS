@@ -32,6 +32,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     <script src="assets/js/core/config.js"></script>
     <script src="assets/js/core/providers.js"></script>
     <script src="assets/js/core/oauth.js"></script>
+<script src="assets/js/core/demo-auth.js"></script>
 <script src="assets/js/engines/mail.js"></script>
 <script src="assets/js/engines/commitment.js"></script>
 <script src="assets/js/engines/priority.js"></script>
@@ -41,8 +42,9 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/engines/search.js"></script>
 <script src="assets/js/engines/briefing.js"></script>
 <script src="assets/js/ui/dom.js"></script>
-<script src="assets/js/ui/components.js"></script>
-<script src="assets/js/ui/views/command.js"></script>
+    <script src="assets/js/ui/components.js"></script>
+    <script src="assets/js/core/details.js"></script>
+    <script src="assets/js/ui/views/command.js"></script>
 <script src="assets/js/ui/views/day.js"></script>
 <script src="assets/js/ui/views/mail.js"></script>
 <script src="assets/js/ui/views/calendar.js"></script>
@@ -51,6 +53,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/ui/views/search.js"></script>
 <script src="assets/js/ui/views/commitments.js"></script>
 <script src="assets/js/ui/views/control.js"></script>
+<script src="assets/js/ui/views/auth.js"></script>
 <script src="assets/js/app.js"></script>
 <script>
 
@@ -84,6 +87,181 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     });
     ok('view rendered', document.getElementById('view').children.length > 0,
        document.getElementById('view').children.length + ' children');
+
+    /* ============================================================
+       Demo authentication (assessment-safe). A clearly-labelled
+       DEMO sign-in/sign-up layer — NOT real auth. No password is
+       stored anywhere; it is validated in memory only. Supabase
+       Auth is NOT activated. A demo session is established here so
+       the downstream route loop (below) renders every real view. */
+    var TEST_PW = 'Demo' + 'Password' + '123!';
+
+    tryRun('welcome screen loads', function () {
+      window.location.hash = '#/welcome';
+      window.App.render();
+      var root = document.getElementById('view');
+      return root.children.length + ' blocks';
+    });
+    ok('welcome screen loads with branding, Sign In, Create Account and demo note',
+       (function () {
+         var t = document.getElementById('view').textContent;
+         return t.indexOf('AI Life OS') !== -1 &&
+                t.indexOf('Your Personal AI Chief of Staff') !== -1 &&
+                t.indexOf('Remember less. Organize less. Get more done.') !== -1 &&
+                t.indexOf('Sign In') !== -1 &&
+                t.indexOf('Create Account') !== -1 &&
+                t.indexOf('Continue as Demo') !== -1 &&
+                t.indexOf('Demo Environment') !== -1;
+       })());
+
+    tryRun('sign in screen loads', function () {
+      window.location.hash = '#/signin';
+      window.App.render();
+      return document.getElementById('view').children.length + ' blocks';
+    });
+    ok('sign in screen loads with email + password fields and demo note',
+       (function () {
+         var root = document.getElementById('view');
+         var types = Array.prototype.map.call(root.querySelectorAll('input'), function (i) { return i.type; });
+         return types.indexOf('email') !== -1 && types.indexOf('password') !== -1 &&
+                root.textContent.indexOf('Sign In') !== -1 &&
+                root.textContent.indexOf('Demo Environment') !== -1;
+       })());
+
+    tryRun('sign up screen loads', function () {
+      window.location.hash = '#/signup';
+      window.App.render();
+      return document.getElementById('view').children.length + ' blocks';
+    });
+    ok('sign up screen loads with name, email, password, confirm and demo note',
+       (function () {
+         var root = document.getElementById('view');
+         var types = Array.prototype.map.call(root.querySelectorAll('input'), function (i) { return i.type; });
+         var emails = types.filter(function (t) { return t === 'email'; }).length;
+         var pws = types.filter(function (t) { return t === 'password'; }).length;
+         var labels = Array.prototype.map.call(root.querySelectorAll('label'), function (l) { return l.textContent; });
+         return emails === 1 && pws === 2 &&
+                labels.indexOf('Full Name') !== -1 &&
+                labels.indexOf('Email Address') !== -1 &&
+                labels.indexOf('Password') !== -1 &&
+                labels.indexOf('Confirm Password') !== -1 &&
+                root.textContent.indexOf('Create Account') !== -1 &&
+                root.textContent.indexOf('Demo Environment') !== -1;
+       })());
+
+    /* Validation: required fields, email format, password match, min length. */
+    ok('sign up validation: required fields are enforced',
+       (function () {
+         var r = window.DemoAuth.validateSignUp({ name: '', email: '', password: '', confirm: '' });
+         return !r.ok && r.errors.length >= 4;
+       })());
+    ok('sign up validation: invalid email is rejected',
+       (function () {
+         var r = window.DemoAuth.validateSignUp({ name: 'A B', email: 'not-an-email', password: TEST_PW, confirm: TEST_PW });
+         return !r.ok && r.errors.some(function (e) { return /valid email/i.test(e); });
+       })());
+    ok('sign up validation: password confirmation mismatch is rejected',
+       (function () {
+         var r = window.DemoAuth.validateSignUp({ name: 'A B', email: 'a@b.co', password: TEST_PW, confirm: 'Different' + 'Password' + '123!' });
+         return !r.ok && r.errors.some(function (e) { return /do not match/i.test(e); });
+       })());
+    ok('sign up validation: short password is rejected',
+       (function () {
+         var r = window.DemoAuth.validateSignUp({ name: 'A B', email: 'a@b.co', password: 'short', confirm: 'short' });
+         return !r.ok && r.errors.some(function (e) { return /at least/i.test(e); });
+       })());
+    ok('sign in validation: invalid email and short password are rejected',
+       (function () {
+         var r = window.DemoAuth.validateSignIn({ email: 'nope', password: 'x' });
+         return !r.ok && r.errors.length >= 2;
+       })());
+
+    /* Sign up creates a demo session; the password is never persisted. */
+    tryRun('demo sign up creates a session', function () {
+      var r = window.DemoAuth.signUp({ name: 'Assessment Tester', email: 'assessor@demo.lifeos', password: TEST_PW, confirm: TEST_PW });
+      return r.ok ? 'session=' + r.session.email : 'FAILED: ' + r.errors.join('; ');
+    });
+    ok('demo sign up creates an active demo session', window.DemoAuth.isSignedIn() === true);
+    ok('demo session stores only non-sensitive fields (no password, no token)',
+       (function () {
+         var s = window.DemoAuth.session();
+         var keys = s ? Object.keys(s) : [];
+         return keys.indexOf('password') === -1 && keys.indexOf('token') === -1 &&
+                keys.indexOf('secret') === -1 && keys.indexOf('userId') !== -1 &&
+                keys.indexOf('name') !== -1 && keys.indexOf('email') !== -1 &&
+                keys.indexOf('authState') !== -1;
+       })());
+    ok('password is never persisted to localStorage or sessionStorage',
+       (function () {
+         var stores = [window.localStorage, window.sessionStorage];
+         for (var i = 0; i < stores.length; i++) {
+           var st = stores[i];
+           for (var j = 0; j < st.length; j++) {
+             var k = st.key(j);
+             var v = st.getItem(k);
+             if ((k && k.indexOf(TEST_PW) !== -1) || (v && v.indexOf(TEST_PW) !== -1)) return false;
+           }
+         }
+         return true;
+       })());
+
+    /* Direct route protection: unauthenticated #/command redirects to Sign In. */
+    tryRun('unauthenticated #/command redirects to sign in', function () {
+      window.DemoAuth.clear();
+      window.location.hash = '#/command';
+      window.App.render();
+      return window.App.route().path;
+    });
+    ok('unauthenticated #/command redirects to #/signin', window.App.route().path === '/signin');
+
+    /* Demo sign-in reaches the existing Command Center, unchanged. */
+    tryRun('demo sign in reaches the Command Center', function () {
+      var r = window.DemoAuth.signIn({ email: 'assessor@demo.lifeos', password: TEST_PW });
+      if (!r.ok) return 'sign in failed: ' + r.errors.join('; ');
+      window.location.hash = '#/command';
+      window.App.render();
+      var root = document.getElementById('view');
+      return root.children.length + ' blocks';
+    });
+    ok('signed-in #/command opens the existing Command Center (greeting + priority cards)',
+       (function () {
+         var t = document.getElementById('view').textContent;
+         return t.indexOf('Good ') !== -1 && t.indexOf('Priority items') !== -1 &&
+                window.DemoAuth.isSignedIn() === true;
+       })());
+    ok('Command Center remains functional after sign-in',
+       window.EnginesBriefing.build().stats.meetings === 3 &&
+       window.EnginesPriority.priorityItems().length === 4);
+    ok('Action Authorization Layer is unchanged by the demo session',
+       window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, window.Store.user()).mode === 'approve');
+    ok('providers remain in demo mode (provider/OAuth architecture unchanged)',
+       window.Providers.demoMode() === true);
+
+    /* Forgot Password? must not pretend to send a real email. */
+    tryRun('forgot password shows the demo recovery message', function () {
+      window.location.hash = '#/signin';
+      window.App.render();
+      var btns = Array.prototype.filter.call(document.querySelectorAll('#view .btn'), function (b) { return b.textContent === 'Forgot Password?'; });
+      if (!btns.length) return 'no Forgot Password? button';
+      btns[0].click();
+      var toast = document.querySelector('#toasts .toast');
+      return toast ? toast.textContent : 'NO TOAST';
+    });
+    ok('forgot password never pretends to send a real email',
+       (function () {
+         var toast = document.querySelector('#toasts .toast');
+         return !!toast && toast.textContent.indexOf('secure account authentication is connected') !== -1;
+       })());
+
+    /* Continue as Demo: one-click demo session with no password involved. */
+    tryRun('continue as demo creates a password-free session', function () {
+      window.DemoAuth.signOut();
+      var r = window.DemoAuth.continueDemo();
+      return r.ok ? 'session=' + r.session.email : 'FAILED';
+    });
+    ok('continue as demo signs in without any password',
+       window.DemoAuth.isSignedIn() === true &&
+       window.DemoAuth.session().email === 'demo@lifeos.local');
 
     var seedCounts = 'contacts=' + window.Store.contacts().length +
       ' emails=' + window.Store.emails().length +
@@ -722,6 +900,415 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       return window.Store.resolveSource({ type: 'meeting', ref: 'm1' }).label + ' | ' +
              window.Store.resolveSource({ type: 'email', ref: 'm04' }).label;
     });
+
+    /* Sign Out clears the demo session and returns to Sign In,
+       without deleting the underlying demo data or seed. */
+    tryRun('sign out clears the demo session', function () {
+      var before = window.DemoAuth.isSignedIn();
+      window.DemoAuth.signOut();
+      return 'signedIn before=' + before + ' after=' + window.DemoAuth.isSignedIn();
+    });
+    ok('sign out clears the demo session', window.DemoAuth.isSignedIn() === false);
+    ok('sign out does not delete the underlying demo data',
+       window.Store.tasks().length === 15 && window.Store.emails().length === 24);
+    tryRun('unauthenticated #/command redirects to sign in after sign out', function () {
+      window.location.hash = '#/command';
+      window.App.render();
+      return window.App.route().path;
+    });
+    ok('unauthenticated #/command redirects to #/signin after sign out',
+       window.App.route().path === '/signin');
+    ok('demo session key is removed from storage after sign out',
+       window.localStorage.getItem(window.DemoAuth.KEY) === null);
+
+    /* ============================================================
+       Regression: authentication / landing routes render WITHOUT
+       the authenticated application shell (sidebar, navigation
+       and activity badges); the authenticated Command Center
+       keeps the normal shell. The shell is toggled route-aware
+       in app.js render(); the sidebar is hidden via CSS.
+       selftest.html has no app shell of its own, so a minimal
+       .shell/.sidebar fixture (matching index.html) is injected
+       to exercise the real toggle against real DOM + CSS. */
+    var fixtureShell = document.createElement('div');
+    fixtureShell.className = 'shell';
+    fixtureShell.innerHTML = '<nav class="sidebar"></nav><main class="main"></main>';
+    document.body.appendChild(fixtureShell);
+
+    function shellState() {
+      var shell = document.querySelector('.shell');
+      var sb = document.querySelector('.sidebar');
+      return {
+        isAuth: !!(shell && shell.classList.contains('is-auth')),
+        sidebarDisplay: sb ? window.getComputedStyle(sb).display : null
+      };
+    }
+
+    /* Exactly the three landing routes hide the shell; every
+       app route (and the OAuth callback) keeps it. */
+    ok('shell-hidden route set is exactly welcome/signin/signup',
+       window.App.isAuthShellRoute('/welcome') === true &&
+       window.App.isAuthShellRoute('/signin') === true &&
+       window.App.isAuthShellRoute('/signup') === true &&
+       window.App.isAuthShellRoute('/command') === false &&
+       window.App.isAuthShellRoute('/day') === false &&
+       window.App.isAuthShellRoute('/mail') === false &&
+       window.App.isAuthShellRoute('/oauth') === false);
+
+    tryRun('welcome route renders without the authenticated shell', function () {
+      window.location.hash = '#/welcome';
+      window.App.render();
+      var s = shellState();
+      return 'isAuth=' + s.isAuth + ' sidebarDisplay=' + s.sidebarDisplay;
+    });
+    ok('#/welcome does NOT contain the authenticated sidebar',
+       (function () { var s = shellState(); return s.isAuth === true && s.sidebarDisplay === 'none'; })());
+
+    tryRun('sign in route renders without the authenticated shell', function () {
+      window.location.hash = '#/signin';
+      window.App.render();
+      var s = shellState();
+      return 'isAuth=' + s.isAuth + ' sidebarDisplay=' + s.sidebarDisplay;
+    });
+    ok('#/signin does NOT contain the authenticated sidebar',
+       (function () { var s = shellState(); return s.isAuth === true && s.sidebarDisplay === 'none'; })());
+
+    tryRun('sign up route renders without the authenticated shell', function () {
+      window.location.hash = '#/signup';
+      window.App.render();
+      var s = shellState();
+      return 'isAuth=' + s.isAuth + ' sidebarDisplay=' + s.sidebarDisplay;
+    });
+    ok('#/signup does NOT contain the authenticated sidebar',
+       (function () { var s = shellState(); return s.isAuth === true && s.sidebarDisplay === 'none'; })());
+
+    tryRun('authenticated command route keeps the normal shell', function () {
+      window.DemoAuth.continueDemo();
+      window.location.hash = '#/command';
+      window.App.render();
+      var s = shellState();
+      return 'isAuth=' + s.isAuth + ' sidebarDisplay=' + s.sidebarDisplay + ' innerWidth=' + window.innerWidth;
+    });
+    ok('authenticated #/command DOES contain the normal application shell',
+       (function () {
+         var s = shellState();
+         return s.isAuth === false && (window.innerWidth <= 900 || s.sidebarDisplay !== 'none');
+       })());
+
+    /* ============================================================
+       Real user-local date/time + true calendar month grid +
+       full-content detail modals + manual action creation/editing.
+       The seeded narrative stays anchored to the deterministic
+       demo date (2026-09-22); the real-local clock and calendar
+       are display-only. setRealToday pins the real date here so
+       calendar assertions are reproducible (test-only). */
+    ok('real-local clock: timezone is a non-empty IANA name',
+       typeof window.D.timeZone() === 'string' && window.D.timeZone().length > 0 &&
+       window.D.timeZone().indexOf('/') !== -1,
+       window.D.timeZone());
+    ok('real-local clock: timezone label resolves',
+       typeof window.D.timeZoneLabel() === 'string' && window.D.timeZoneLabel().length > 0,
+       window.D.timeZoneLabel());
+    ok('real-local clock: realToday is a valid ISO date',
+       /^\d{4}-\d{2}-\d{2}$/.test(window.D.realToday()),
+       window.D.realToday());
+    ok('real-local clock: localTime is HH:MM',
+       /^\d{2}:\d{2}$/.test(window.D.localTime()),
+       window.D.localTime());
+    ok('real-local clock: realDateLong is non-empty',
+       window.D.realDateLong().length > 0, window.D.realDateLong());
+    ok('real-local clock: realDayName is a weekday',
+       ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+         .indexOf(window.D.realDayName()) !== -1,
+       window.D.realDayName());
+    ok('simulated date stays anchored to the seed (deterministic narrative)',
+       window.D.today() === '2026-09-22', window.D.today());
+
+    /* Calendar grid — September 2026: 30 days, starts Tuesday. */
+    tryRun('buildMonth(2026-09-22)', function () {
+      var g = window.D.buildMonth('2026-09-22');
+      return 'year=' + g.year + ' month=' + g.month + ' startWeekday=' + g.startWeekday +
+             ' daysInMonth=' + g.daysInMonth + ' cells=' + g.cells.length +
+             ' today=' + g.todayIso;
+    });
+    ok('buildMonth: September 2026 has 30 days, correct start weekday and a whole-week grid',
+       (function () {
+         var g = window.D.buildMonth('2026-09-22');
+         var first = new Date(2026, 8, 1);
+         return g.year === 2026 && g.month === 8 && g.daysInMonth === 30 &&
+                g.startWeekday === first.getDay() &&
+                g.cells.length % 7 === 0 &&
+                g.cells.length >= g.startWeekday + g.daysInMonth &&
+                g.todayIso === '2026-09-22';
+       })(),
+       (function () { var g = window.D.buildMonth('2026-09-22'); return JSON.stringify(g); })());
+    ok('buildMonth: leading blanks precede the 1st and the grid is fully padded',
+       (function () {
+         var g = window.D.buildMonth('2026-09-22');
+         return g.cells.indexOf('2026-09-01') === g.startWeekday &&
+                g.cells.filter(function (c) { return !c; }).length === g.cells.length - g.daysInMonth;
+       })());
+    ok('buildMonth: cells are ISO date strings, not day numbers',
+       g_cellsAreIso(window.D.buildMonth('2026-09-22')));
+    ok('buildMonth: leap-year February has 29 days (2024)',
+       window.D.buildMonth('2024-02-15').daysInMonth === 29);
+    ok('buildMonth: non-leap February has 28 days (2026)',
+       window.D.buildMonth('2026-02-15').daysInMonth === 28);
+    ok('buildMonth: month lengths are correct (Jan 31, Apr 30, Dec 31)',
+       window.D.buildMonth('2026-01-15').daysInMonth === 31 &&
+       window.D.buildMonth('2026-04-15').daysInMonth === 30 &&
+       window.D.buildMonth('2026-12-15').daysInMonth === 31);
+    ok('addMonths: previous and next month roll over correctly',
+       window.D.addMonths('2026-09-22', -1) === '2026-08-22' &&
+       window.D.addMonths('2026-09-22', 1) === '2026-10-22',
+       window.D.addMonths('2026-09-22', -1) + ' / ' + window.D.addMonths('2026-09-22', 1));
+    ok('addMonths: day is clamped to the target month length',
+       window.D.addMonths('2026-03-31', -1) === '2026-02-28',
+       window.D.addMonths('2026-03-31', -1));
+    ok('monthDate: builds an ISO date from year, month and day parts',
+       window.D.monthDate(2026, 8, 15) === '2026-09-15');
+    ok('seeded events stay on their authored dates (calendar is never re-anchored)',
+       window.EnginesTasks.eventsFor('2026-09-22').length === 3 &&
+       window.EnginesTasks.eventsFor('2026-09-23').length === 3,
+       '09-22=' + window.EnginesTasks.eventsFor('2026-09-22').length +
+       ' 09-23=' + window.EnginesTasks.eventsFor('2026-09-23').length);
+
+    /* Manual action creation with the full field set, persisted
+       through the existing store (localStorage lifeos.sim.v1). */
+    tryRun('manual action creation with all fields', function () {
+      var before = window.Store.tasks().length;
+      var t = window.Store.mut.createTask({
+        title: 'Test action with details',
+        description: 'A detailed description',
+        dueDate: '2026-10-05',
+        dueTime: '14:30',
+        reminder: '2026-10-05T14:00',
+        project: 'Client work',
+        priority: 'high',
+        status: 'Planned'
+      });
+      var after = window.Store.tasks().length;
+      var s = window.Store.task(t.id);
+      return before + '->' + after +
+             ' desc=' + s.description + ' due=' + s.dueDate + ' ' + s.dueTime +
+             ' rem=' + s.reminder + ' proj=' + s.project +
+             ' prio=' + s.priority + ' status=' + s.status;
+    });
+    ok('manual action persists description, due date, due time, reminder, project, priority and status',
+       (function () {
+         var t = window.Store.tasks().filter(function (x) { return x.title === 'Test action with details'; })[0];
+         return !!t && t.description === 'A detailed description' &&
+                t.dueDate === '2026-10-05' && t.dueTime === '14:30' &&
+                t.reminder === '2026-10-05T14:00' && t.project === 'Client work' &&
+                t.priority === 'high' && t.status === 'Planned' && t.userCreated === true;
+       })());
+    ok('a manually created dated action appears in tasksFor on its calendar date',
+       window.EnginesTasks.tasksFor('2026-10-05').some(function (x) { return x.title === 'Test action with details'; }));
+
+    /* Action edit form — pre-filled, validated, persisted. */
+    tryRun('action edit form opens pre-filled', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      var t = window.Store.tasks().filter(function (x) { return x.title === 'Test action with details'; })[0];
+      window.Details.openEditAction(t, {});
+      var root = document.getElementById('modal-root');
+      var titleInput = root.querySelector('input[type=text]');
+      return 'title=' + (titleInput ? titleInput.value : 'NONE') +
+             ' textareas=' + root.querySelectorAll('textarea').length +
+             ' selects=' + root.querySelectorAll('select').length;
+    });
+    ok('action edit form has title, description, due date, due time, reminder, project, priority and status',
+       (function () {
+         var root = document.getElementById('modal-root');
+         var titleInput = root.querySelector('input[type=text]');
+         var dateInput = root.querySelector('input[type=date]');
+         var timeInput = root.querySelector('input[type=time]');
+         var remInput = root.querySelector('input[type=datetime-local]');
+         var projInput = root.querySelector('input[list]');
+         return !!titleInput && titleInput.value === 'Test action with details' &&
+                dateInput.value === '2026-10-05' && timeInput.value === '14:30' &&
+                remInput.value === '2026-10-05T14:00' && projInput.value === 'Client work' &&
+                root.querySelectorAll('textarea').length === 1 &&
+                root.querySelectorAll('select').length === 2 &&
+                root.querySelectorAll('datalist').length === 1;
+       })());
+    tryRun('action edit saves changes', function () {
+      var root = document.getElementById('modal-root');
+      var titleInput = root.querySelector('input[type=text]');
+      titleInput.value = 'Test action edited';
+      var save = Array.prototype.filter.call(
+        root.querySelectorAll('.modal-foot .btn'),
+        function (b) { return b.textContent === 'Save changes'; })[0];
+      if (!save) return 'no Save button';
+      save.click();
+      return 'edited present=' + window.Store.tasks().some(function (x) { return x.title === 'Test action edited'; });
+    });
+    ok('action edit persists the edited title',
+       window.Store.tasks().some(function (x) { return x.title === 'Test action edited'; }) &&
+       !window.Store.tasks().some(function (x) { return x.title === 'Test action with details'; }));
+    tryRun('action form validation rejects an empty title', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      var t = window.Store.tasks().filter(function (x) { return x.title === 'Test action edited'; })[0];
+      window.Details.openEditAction(t, {});
+      var root = document.getElementById('modal-root');
+      root.querySelector('input[type=text]').value = '';
+      var save = Array.prototype.filter.call(
+        root.querySelectorAll('.modal-foot .btn'),
+        function (b) { return b.textContent === 'Save changes'; })[0];
+      save.click();
+      var errBox = root.querySelector('.modal-body .alert-danger');
+      return 'error=' + (errBox ? errBox.textContent : 'NONE') +
+             ' modalsOpen=' + document.querySelectorAll('#modal-root .modal').length +
+             ' titleStill=' + window.Store.task(t.id).title;
+    });
+    ok('action form validation: empty title is rejected inline and the modal stays open',
+       (function () {
+         var root = document.getElementById('modal-root');
+         var errBox = root.querySelector('.modal-body .alert-danger');
+         return document.querySelectorAll('#modal-root .modal').length === 1 &&
+                !!errBox && /required/i.test(errBox.textContent) &&
+                window.Store.tasks().some(function (x) { return x.title === 'Test action edited'; });
+       })());
+
+    /* Full-content detail modals for every object type. */
+    tryRun('email detail modal shows full content', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.Details.open({ kind: 'email', ref: 'm01' });
+      return document.getElementById('modal-root').textContent.slice(0, 160);
+    });
+    ok('email detail shows sender, recipient, full body and timestamp',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         var e = window.Store.email('m01');
+         var u = window.Store.user();
+         return txt.indexOf(e.subject) !== -1 &&
+                txt.indexOf('From') !== -1 && txt.indexOf(u.email) !== -1 &&
+                txt.indexOf('finance team') !== -1 &&
+                txt.indexOf(window.D.formatDateTime(e.received)) !== -1;
+       })());
+
+    tryRun('event detail modal shows full content', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.Details.open({ kind: 'event', ref: 'e1' });
+      return document.getElementById('modal-root').textContent.slice(0, 160);
+    });
+    ok('event detail shows date, time, location, participants and notes',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         var e = window.Store.event('e1');
+         var names = e.attendeeIds.map(function (id) { return window.Store.contactName(id); }).join(', ');
+         return txt.indexOf(e.title) !== -1 &&
+                txt.indexOf(window.D.formatLong(e.date)) !== -1 &&
+                txt.indexOf(e.start + '–' + e.end) !== -1 &&
+                txt.indexOf(e.location) !== -1 &&
+                txt.indexOf(names) !== -1 &&
+                txt.indexOf(e.notes) !== -1;
+       })());
+
+    tryRun('task detail modal shows full content', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.Details.open({ kind: 'task', ref: 't1' });
+      return document.getElementById('modal-root').textContent.slice(0, 160);
+    });
+    ok('task detail shows title, status, Edit and an appropriate status action',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         var t = window.Store.task('t1');
+         var labels = Array.prototype.map.call(
+           document.querySelectorAll('#modal-root .modal-foot .btn'),
+           function (b) { return b.textContent; });
+         var expected = ['In Progress', 'Waiting', 'Completed']
+           .filter(function (s) { return s !== t.status; });
+         return txt.indexOf(t.title) !== -1 && txt.indexOf(t.status) !== -1 &&
+                labels.indexOf('Edit') !== -1 &&
+                expected.some(function (s) { return labels.indexOf(s) !== -1; });
+       })());
+
+    tryRun('commitment detail modal shows full content', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.Details.open({ kind: 'commitment', ref: 'k1' });
+      return document.getElementById('modal-root').textContent.slice(0, 160);
+    });
+    ok('commitment detail shows description, direction, person and due date',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         var k = window.Store.commitment('k1');
+         var p = window.Store.contact(k.personId);
+         return txt.indexOf(k.description) !== -1 &&
+                txt.indexOf(window.EnginesCommitment.directionLabel(k.direction)) !== -1 &&
+                txt.indexOf(p.name) !== -1 &&
+                (k.dueDate ? txt.indexOf(window.D.formatDate(k.dueDate)) !== -1 : true);
+       })());
+
+    /* The calendar view renders a true month grid anchored to the
+       (pinned) real local date, with today highlighted and event
+       dots on the authored event dates. */
+    window.D.setRealToday('2026-09-22');
+    tryRun('calendar view renders a real month grid', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.DemoAuth.continueDemo();
+      window.location.hash = '#/calendar';
+      window.App.render();
+      var root = document.getElementById('view');
+      var grid = root.querySelectorAll('.cal-grid .cal-cell').length;
+      var wds = root.querySelectorAll('.cal-week .cal-wd').length;
+      var title = root.querySelector('.cal-title');
+      return 'cells=' + grid + ' weekdayHeaders=' + wds +
+             ' title=' + (title ? title.textContent : 'NONE') +
+             ' todayCells=' + root.querySelectorAll('.cal-cell.today').length +
+             ' evDots=' + root.querySelectorAll('.cal-dot.ev').length;
+    });
+    ok('calendar renders the demo month (September 2026) with today highlighted and event dots',
+       (function () {
+         var root = document.getElementById('view');
+         var title = root.querySelector('.cal-title');
+         return !!title && title.textContent === 'September 2026' &&
+                root.querySelectorAll('.cal-cell.today').length === 1 &&
+                root.querySelectorAll('.cal-week .cal-wd').length === 7 &&
+                root.querySelectorAll('.cal-dot.ev').length >= 3;
+       })(),
+       (function () { var t = document.querySelector('.cal-title'); return t ? t.textContent : 'NONE'; })());
+
+    tryRun('calendar day click selects the day and shows its agenda', function () {
+      var root = document.getElementById('view');
+      var cells = Array.prototype.filter.call(
+        root.querySelectorAll('.cal-cell'),
+        function (c) {
+          var dn = c.querySelector('.cal-dn');
+          return dn && dn.textContent === '23';
+        });
+      if (!cells.length) return 'no cell for the 23rd';
+      cells[0].click();
+      var t = document.getElementById('view').textContent;
+      return 'Team Standup=' + (t.indexOf('Team Standup') !== -1) +
+             ' 1:1 with David=' + (t.indexOf('1:1 with David') !== -1);
+    });
+    ok('clicking a calendar day opens that day\'s events in the agenda',
+       (function () {
+         var t = document.getElementById('view').textContent;
+         return t.indexOf('Team Standup') !== -1 && t.indexOf('1:1 with David') !== -1;
+       })());
+
+    tryRun('calendar event click opens the full event detail', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      var ev = document.querySelector('#view .cal-event');
+      if (!ev) return 'no event in the agenda';
+      ev.click();
+      var head = document.querySelector('#modal-root .modal-head h2');
+      return 'modal title=' + (head ? head.textContent : 'NONE');
+    });
+    ok('clicking a calendar event opens a full-content event detail modal',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         return document.querySelectorAll('#modal-root .modal').length === 1 &&
+                (txt.indexOf('Participants') !== -1 || txt.indexOf('Location') !== -1);
+       })());
+
+    function g_cellsAreIso(g) {
+      if (!g || !g.cells) return false;
+      return g.cells.every(function (c) {
+        return c === null || /^\d{4}-\d{2}-\d{2}$/.test(c);
+      });
+    }
 
     lines.push('---');
     lines.push(fails === 0 ? 'ALL PASS' : (fails + ' FAILURE(S)'));
