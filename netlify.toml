@@ -1,0 +1,35 @@
+# Netlify deployment configuration for Life OS.
+#
+# The site's base directory is `sim`. During a Netlify build the
+# command below generates the same browser-safe runtime config
+# (assets/js/env.js) that the GitHub Pages workflow produces,
+# using the SUPABASE_URL and SUPABASE_ANON_KEY environment
+# variables supplied in the Netlify UI. Only the publishable
+# anon key is ever written; service-role, database, and JWT
+# credentials are never used. The generated assets/js/env.js is
+# gitignored and is never committed — no secret value is stored
+# in this repository.
+
+[build]
+  # Run the build from the `sim` directory.
+  base = "sim"
+  # Publish the `sim` directory itself (relative to the base dir).
+  publish = "."
+  # Generate the runtime environment file during the build. The
+  # [build] command runs in a Bash shell, so an unquoted heredoc
+  # expands the two environment variables into env.js. A guard
+  # fails the deploy if any server-only key name ever leaks into
+  # the generated file.
+  command = '''
+cat > assets/js/env.js <<EOF
+window.__LIFEOS_ENV__ = {
+  LIFEOS_MODE: 'live',
+  SUPABASE_URL: '${SUPABASE_URL}',
+  SUPABASE_ANON_KEY: '${SUPABASE_ANON_KEY}'
+};
+EOF
+if grep -Eq 'SERVICE_ROLE|DB_URL|DB_PASSWORD|JWT_SECRET|CLIENT_SECRET' assets/js/env.js; then
+  echo "env.js must contain only browser-safe keys" >&2
+  exit 1
+fi
+'''
