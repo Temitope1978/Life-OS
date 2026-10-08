@@ -33,3 +33,10 @@ if grep -Eq 'SERVICE_ROLE|DB_URL|DB_PASSWORD|JWT_SECRET|CLIENT_SECRET' assets/js
   exit 1
 fi
 '''
+
+[build.environment]
+  # The generated browser config (sim/assets/js/env.js) intentionally
+  # contains only the browser-safe anon key. Omit it from Netlify's
+  # secrets scanner so the build is not flagged, while scanning stays
+  # enabled for everything else.
+  SECRETS_SCAN_OMIT_PATHS = "sim/assets/js/env.js"
