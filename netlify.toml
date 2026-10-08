@@ -40,3 +40,7 @@ fi
   # secrets scanner so the build is not flagged, while scanning stays
   # enabled for everything else.
   SECRETS_SCAN_OMIT_PATHS = "sim/assets/js/env.js"
+  # The anon key is a browser-safe publishable key, not a server secret.
+  # Omit it by key name so the scanner does not flag its value wherever
+  # it appears; path-based omission proved unreliable with base = "sim".
+  SECRETS_SCAN_OMIT_KEYS = "SUPABASE_ANON_KEY"
