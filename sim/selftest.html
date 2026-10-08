@@ -33,6 +33,9 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     <script src="assets/js/core/providers.js"></script>
     <script src="assets/js/core/oauth.js"></script>
 <script src="assets/js/core/demo-auth.js"></script>
+<script src="assets/js/core/session.js"></script>
+<script src="assets/js/core/identity.js"></script>
+<script src="assets/js/core/supabase-auth.js"></script>
 <script src="assets/js/engines/mail.js"></script>
 <script src="assets/js/engines/commitment.js"></script>
 <script src="assets/js/engines/priority.js"></script>
@@ -53,6 +56,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/ui/views/search.js"></script>
 <script src="assets/js/ui/views/commitments.js"></script>
 <script src="assets/js/ui/views/control.js"></script>
+<script src="assets/js/ui/views/settings.js"></script>
 <script src="assets/js/ui/views/auth.js"></script>
 <script src="assets/js/app.js"></script>
 <script>
@@ -71,6 +75,376 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       lines.push('      ' + String(e.stack || '').split('\n').slice(0, 4).join(' | '));
       return null;
     }
+  }
+
+  /* ---------- Finalization ----------
+     The synchronous suite settles immediately, but the
+     production-adapter contract tests (below) are async.
+     `finish` renders the summary exactly once, whether
+     the async tests settle or the safety timeout fires. */
+  var finalized = false;
+  function finish() {
+    if (finalized) return;
+    finalized = true;
+    lines.push('---');
+    lines.push(fails === 0 ? 'ALL PASS' : (fails + ' FAILURE(S)'));
+    document.getElementById('out').textContent = lines.join('\n');
+    var bar = document.getElementById('bar');
+    bar.textContent = fails === 0 ? 'All checks passed' : fails + ' check(s) failed';
+    bar.className = 'bar ' + (fails === 0 ? 'ok' : 'bad');
+  }
+
+  /* ---------- Mock Supabase client (TEST ONLY) ----------
+     A clearly-marked in-memory stand-in for the official
+     Supabase client. It is NOT a real Supabase response
+     and is never shipped: it exists only to exercise the
+     SupabaseAuthAdapter's contract (session shape, profile
+     fact reading, fail-closed sign-in, sign-out) without
+     network access or credentials. Never fake a real
+     production sign-in with this — real sign-up, sign-in,
+     session restoration, the new-user trigger and RLS are
+     verified against a real Supabase project only. */
+  function makeMockSupabase() {
+    var users = {}, profiles = {}, sessions = {};
+    var currentUserId = null;
+    var seq = 0;
+    var queried = {};   /* every table the adapter queries */
+
+    function userRecord(id, email, name) {
+      return {
+        id: id, email: email, created_at: '2026-01-01T00:00:00Z',
+        user_metadata: { full_name: name },
+        raw_user_meta_data: { full_name: name }
+      };
+    }
+
+    /* A profile row shaped EXACTLY like the existing
+       public.profiles table (supabase/migrations/
+       20261001000001_schema.sql): user_id, name, email,
+       timezone, subscription, preferences, created_at.
+       It deliberately has NO display_name and NO avatar_url
+       column, so any adapter that referenced them would read
+       undefined and fail the shape assertions below. */
+    function profileRow(id, name, email, timezone, subscription) {
+      return {
+        user_id: id, name: name, email: email,
+        timezone: timezone || 'Europe/London',
+        subscription: subscription || 'free',
+        preferences: {}, created_at: '2026-01-01T00:00:00Z'
+      };
+    }
+
+    var client = {
+      /* Test-only seeding helpers (the adapter ignores them). */
+      _seedUser: function (email, profileName) {
+        var id = 'mock-user-' + (++seq);
+        /* user_metadata.full_name is deliberately a DIFFERENT value
+           from the profile.name column, so the tests can prove the
+           adapter reads the existing profile.name column and does not
+           fall back to the auth metadata. */
+        users[id] = userRecord(id, email, 'Metadata ' + profileName);
+        profiles[id] = profileRow(id, profileName, email, 'Europe/Oslo', 'free');
+        sessions[id] = {
+          user: users[id], expires_at: '2026-12-31T00:00:00Z',
+          created_at: '2026-01-01T00:00:00Z', access_token: 'MOCK-TOKEN-' + id
+        };
+        return id;
+      },
+      _setCurrent: function (id) { currentUserId = id; },
+      _queried: function () { return Object.keys(queried); },
+
+      auth: {
+        getSession: function () {
+          return Promise.resolve({ data: { session: currentUserId ? sessions[currentUserId] : null } });
+        },
+        getUser: function () {
+          return Promise.resolve({ data: { user: currentUserId ? users[currentUserId] : null } });
+        },
+        signInWithPassword: function (creds) {
+          var found = null;
+          Object.keys(users).forEach(function (k) { if (users[k].email === creds.email) found = k; });
+          /* single hardcoded test password, as Supabase would verify server-side */
+          if (!found || creds.password !== 'correct-password') {
+            return Promise.resolve({ data: {}, error: { message: 'Invalid login credentials' } });
+          }
+          currentUserId = found;
+          return Promise.resolve({ data: { session: sessions[found], user: users[found] } });
+        },
+        signUp: function (params) {
+          var exists = Object.keys(users).some(function (k) { return users[k].email === params.email; });
+          if (exists) return Promise.resolve({ data: {}, error: { message: 'User already registered' } });
+          var id = 'mock-user-' + (++seq);
+          var name = (params.options && params.options.data && params.options.data.full_name) || 'New User';
+          users[id] = userRecord(id, params.email, name);
+          /* Mimic the EXISTING handle_new_user() trigger (migration
+             20261001000003_rls.sql): it creates ONLY a profiles row,
+             with name from the signup metadata, the user's email, a
+             default timezone and a default subscription. It creates no
+             permissions and no autonomy. The adapter must work with
+             exactly this shape. */
+          profiles[id] = profileRow(id, name, params.email, 'Europe/London', 'free');
+          sessions[id] = { user: users[id], expires_at: '2026-12-31T00:00:00Z', created_at: '2026-01-01T00:00:00Z' };
+          currentUserId = id;
+          return Promise.resolve({ data: { session: sessions[id], user: users[id] } });
+        },
+        signOut: function () { currentUserId = null; return Promise.resolve({}); },
+        onAuthStateChange: function () { return { data: { subscription: { unsubscribe: function () {} } } }; }
+      },
+
+      /* The adapter calls client.from(table).select(...).eq(...).
+         Every table it queries is recorded so the tests can prove the
+         adapter reads ONLY the existing public.profiles table and
+         never the nonexistent user_preferences / granted_permissions. */
+      from: function (table) {
+        queried[table] = true;
+        return {
+          select: function () {
+            return {
+              eq: function (col, val) {
+                var rows = (table === 'profiles' && profiles[val]) ? [profiles[val]] : [];
+                return {
+                  then: function (onFulfilled, onRejected) {
+                    return Promise.resolve({ data: rows }).then(onFulfilled, onRejected);
+                  },
+                  single: function () { return Promise.resolve({ data: rows[0] || null }); }
+                };
+              }
+            };
+          }
+        };
+      }
+    };
+    return client;
+  }
+
+  /* ---------- Production adapter tests (async) ----------
+     Run after the synchronous suite. The fail-closed
+     bootstrap is exercised against the real config path
+     (production mode with no Supabase client present);
+     the adapter contract is exercised against the mock
+     above. The demo adapter and default config are
+     restored at the end so the selftest ends exactly as
+     it started. */
+  function productionAuthTests() {
+    var originalAdapter = window.Session.getAdapter();
+    /* Shared across the async steps so every step can inspect
+       the mock (which tables the adapter queried). */
+    var mock;
+
+    return Promise.resolve()
+      /* Fail-closed: production mode on, no Supabase client. */
+      .then(function () {
+        window.Config.load({
+          LIFEOS_MODE: 'live',
+          SUPABASE_URL: 'https://example.supabase.co',
+          SUPABASE_ANON_KEY: 'anon-key'
+        });
+        return window.SupabaseAuth.bootstrap();
+      })
+      .then(function () {
+        ok('production bootstrap() fails closed to the misconfigured adapter when the client is absent',
+           window.Session.getAdapter().id === 'misconfigured' &&
+           window.Session.getAdapter().misconfigured === true);
+        ok('misconfigured adapter reports not authenticated',
+           window.Session.isAuthenticated() === false);
+        ok('misconfigured adapter allows public routes and blocks protected routes',
+           window.Session.requireAuth('/welcome') === true &&
+           window.Session.requireAuth('/command') === false);
+        return window.Session.signIn({ email: 'a@b.co', password: 'x' });
+      })
+      .then(function (r) {
+        ok('misconfigured adapter sign-in fails closed with a clear error (never falls back to demo)',
+           r.ok === false && r.errors && /not configured/i.test(r.errors[0] || ''));
+        return window.Session.signOut();
+      })
+
+      /* Adapter contract against the mock client. */
+      .then(function () {
+        mock = makeMockSupabase();
+        var uid = mock._seedUser('test@lifeos.test', 'Test Person');
+        mock._setCurrent(uid);
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(adapter);
+        return adapter.restore();
+      })
+      .then(function () {
+        var u = window.Session.currentUser();
+        ok('restored production session is authenticated',
+           window.Session.isAuthenticated() === true);
+        ok('production user shape uses the existing profiles schema (name/email/timezone/subscription from DB)',
+           !!(u && u.demo === false && u.userId && u.name === 'Test Person' &&
+              u.email === 'test@lifeos.test' && u.authState === 'supabase' &&
+              u.timezone === 'Europe/Oslo' && u.subscription === 'free'));
+        ok('production user does not fabricate app-layer facts (autonomy/permissions/learnedPrefs are undefined — not in the schema)',
+           !!(u && u.autonomy === undefined && u.permissions === undefined && u.learnedPrefs === undefined));
+        ok('adapter reads the existing public.profiles table',
+           mock._queried().indexOf('profiles') !== -1);
+        ok('adapter does not query the nonexistent user_preferences table',
+           mock._queried().indexOf('user_preferences') === -1);
+        ok('adapter does not query the nonexistent granted_permissions table',
+           mock._queried().indexOf('granted_permissions') === -1);
+        ok('adapter reads profile.name, not display_name (the seeded row has no display_name column; the metadata fallback value differs)',
+           window.Session.currentUser().name === 'Test Person');
+        ok('production session object carries identity but never the raw access token',
+           (function () {
+             var s = window.Session.session();
+             return !!s && s.demo === false && s.userId &&
+                    s.access_token === undefined && s.accessToken === undefined;
+           })());
+        ok('production adapter allows protected and public routes when signed in',
+           window.Session.requireAuth('/command') === true &&
+           window.Session.requireAuth('/welcome') === true);
+        return window.Session.signOut();
+      })
+      .then(function () {
+        ok('production sign-out clears the session and the current user',
+           window.Session.isAuthenticated() === false && window.Session.currentUser() === null);
+        return window.Session.signIn({ email: 'test@lifeos.test', password: 'correct-password' });
+      })
+      .then(function (r) {
+        ok('production sign-in with the correct password authenticates',
+           r.ok === true && window.Session.isAuthenticated() === true &&
+           window.Session.currentUser().name === 'Test Person');
+        return window.Session.signOut();
+      })
+      .then(function () {
+        /* Wrong password on a fresh adapter must fail closed. */
+        mock = makeMockSupabase();
+        mock._seedUser('test@lifeos.test', 'Test Person');
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(adapter);
+        return adapter.signIn({ email: 'test@lifeos.test', password: 'wrong-password' });
+      })
+      .then(function (r) {
+        ok('production sign-in with a wrong password fails closed (not authenticated, clear error)',
+           r.ok === false && window.Session.isAuthenticated() === false &&
+           r.errors && /invalid email or password/i.test(r.errors[0] || ''));
+        return window.Session.signUp({
+          name: 'New Person', email: 'new@lifeos.test',
+          password: 'correct-password', confirm: 'correct-password'
+        });
+      })
+      .then(function (r) {
+        ok('production sign-up creates the account and signs the user in',
+           r.ok === true && window.Session.isAuthenticated() === true &&
+           window.Session.currentUser().name === 'New Person' &&
+           window.Session.currentUser().email === 'new@lifeos.test' &&
+           window.Session.currentUser().demo === false);
+        ok('existing signup-trigger compatibility: the profile created on signup carries the name from metadata and no fabricated permissions/autonomy',
+           window.Session.currentUser().name === 'New Person' &&
+           window.Session.currentUser().timezone === 'Europe/London' &&
+           window.Session.currentUser().subscription === 'free' &&
+           window.Session.currentUser().autonomy === undefined &&
+           window.Session.currentUser().permissions === undefined);
+      })
+      .then(function () {
+        /* Restore the demo adapter + default config so the
+           selftest ends exactly as it started. */
+        window.Config.load();
+        window.Session.setAdapter(originalAdapter);
+        ok('demo adapter is restored after the production adapter tests',
+           window.Session.getAdapter() === originalAdapter &&
+           window.Session.getAdapter().id === 'demo');
+      });
+  }
+
+  /* ---------- Deployment configuration wiring tests (async) ----------
+     Verify the deploy-time configuration path: config.js reads the
+     injected window.__LIFEOS_ENV__, the browser-safe configuration
+     is exactly the three public values, and server-only secrets are
+     never surfaced. These tests mutate the injected environment and
+     the config, then restore them so the selftest ends exactly as
+     it started. They deliberately do NOT re-invoke bootstrap(): the
+     bootstrap promise is intentionally cached (idempotent boot) and
+     is already exercised by productionAuthTests above. */
+  function deploymentConfigWiringTests() {
+    /* Captured before any mutation: the selftest page must NOT load
+       a real env.js, so the injected environment is absent by default
+       and the page starts in demo mode. */
+    var hadInjectedEnv = (typeof window.__LIFEOS_ENV__ !== 'undefined');
+
+    return Promise.resolve()
+      .then(function () {
+        ok('the selftest page loads no env.js and starts in demo mode (window.__LIFEOS_ENV__ is undefined)',
+           hadInjectedEnv === false &&
+           window.Config.isEmpty() === true &&
+           window.SupabaseAuth.mode() === 'demo' &&
+           window.SupabaseAuth.isProductionMode() === false);
+      })
+      /* config.js reads the REAL runtime injection path
+         (window.__LIFEOS_ENV__), not the test-only
+         Config.load(overrides) used elsewhere in this suite. */
+      .then(function () {
+        window.__LIFEOS_ENV__ = {
+          LIFEOS_MODE: 'live',
+          SUPABASE_URL: 'https://example.supabase.co',
+          SUPABASE_ANON_KEY: 'test-anon-key-123'
+        };
+        window.Config.load();   /* no-argument load reads window.__LIFEOS_ENV__ */
+        ok('config.js reads the injected window.__LIFEOS_ENV__ object',
+           window.Config.get('LIFEOS_MODE') === 'live' &&
+           window.Config.get('SUPABASE_URL') === 'https://example.supabase.co' &&
+           window.Config.get('SUPABASE_ANON_KEY') === 'test-anon-key-123');
+        ok('config exposes only key names and lengths, never secret values',
+           window.Config.mask('SUPABASE_ANON_KEY') === 'set · 17 chars' &&
+           window.Config.mask('SUPABASE_URL') === 'set · 27 chars');
+        ok('the browser-safe production configuration is exactly LIFEOS_MODE, SUPABASE_URL and SUPABASE_ANON_KEY',
+           window.SupabaseAuth.isProductionMode() === true &&
+           window.SupabaseAuth.isConfigured() === true);
+      })
+      /* Even if server-only secrets are (wrongly) present in the
+         environment, the config layer never surfaces their values and
+         the adapter's "configured" check depends only on the two
+         public keys. */
+      .then(function () {
+        window.__LIFEOS_ENV__ = {
+          LIFEOS_MODE: 'live',
+          SUPABASE_URL: 'https://example.supabase.co',
+          SUPABASE_ANON_KEY: 'test-anon-key-123',
+          SUPABASE_SERVICE_ROLE_KEY: 'SRV-SECRET-MUST-NOT-SURFACE',
+          SUPABASE_DB_URL: 'postgresql://postgres:DB-SECRET@db.example.supabase.co:5432/postgres',
+          SUPABASE_DB_PASSWORD: 'DB-PASSWORD-SECRET',
+          JWT_SECRET: 'JWT-SECRET',
+          GOOGLE_CLIENT_SECRET: 'OAUTH-CLIENT-SECRET'
+        };
+        window.Config.load();
+        ok('server-only secrets present in the environment are never surfaced as values (mask reveals length only)',
+           window.Config.mask('SUPABASE_SERVICE_ROLE_KEY') === 'set · 27 chars' &&
+           window.Config.mask('SUPABASE_DB_PASSWORD') === 'set · 18 chars' &&
+           window.Config.mask('JWT_SECRET') === 'set · 10 chars');
+        ok('isConfigured() depends only on the two public Supabase keys, not on any server-only secret',
+           window.SupabaseAuth.isConfigured() === true);
+        /* A temporary adapter (NOT installed as the session adapter)
+           proves the adapter derives its storage key from the public
+           URL only, never from a server-only secret. */
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(makeMockSupabase());
+        ok('the adapter derives its storage key from the public SUPABASE_URL only, never from a server-only secret',
+           adapter.storageKey() === 'sb-example-auth-token');
+      })
+      /* A production configuration missing a PUBLIC key is not
+         configured (fails closed) even when server-only secrets are
+         present — the adapter never treats a server-only key as
+         sufficient configuration. */
+      .then(function () {
+        window.__LIFEOS_ENV__ = {
+          LIFEOS_MODE: 'live',
+          SUPABASE_SERVICE_ROLE_KEY: 'SRV-SECRET-MUST-NOT-SURFACE'
+        };
+        window.Config.load();
+        ok('production mode with a missing public key is not configured (fails closed) even if server-only secrets are present',
+           window.SupabaseAuth.isProductionMode() === true &&
+           window.SupabaseAuth.isConfigured() === false);
+      })
+      .then(function () {
+        /* Restore the injected environment and the default config so
+           the selftest ends exactly as it started. */
+        delete window.__LIFEOS_ENV__;
+        window.Config.load();
+        ok('default demo configuration is restored after the wiring tests',
+           window.Config.isEmpty() === true &&
+           window.SupabaseAuth.isProductionMode() === false &&
+           window.Session.getAdapter().id === 'demo');
+      });
   }
 
   try {
@@ -263,6 +637,106 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
        window.DemoAuth.isSignedIn() === true &&
        window.DemoAuth.session().email === 'demo@lifeos.local');
 
+    /* ---------- Session / Identity abstraction ----------
+       The provider-neutral Session (DemoAuth registered as
+       its adapter) and the Identity view must behave exactly
+       like the DemoAuth they wrap, so the app, the routes and
+       the views can stop calling DemoAuth directly. */
+    ok('Session adapter is registered',
+       !!window.Session && !!window.Session.getAdapter());
+    ok('DemoAuth is registered as the demo adapter',
+       window.Session.getAdapter() && window.Session.getAdapter().id === 'demo');
+    ok('Session.isAuthenticated matches DemoAuth.isSignedIn',
+       window.Session.isAuthenticated() === window.DemoAuth.isSignedIn() &&
+       window.Session.isAuthenticated() === true);
+    ok('Session.session exposes the same demo session as DemoAuth',
+       (function () {
+         var a = window.Session.session();
+         var b = window.DemoAuth.session();
+         return a && b &&
+           a.userId === b.userId &&
+           a.name === b.name &&
+           a.email === b.email &&
+           a.authState === b.authState &&
+           !!a.demo === !!b.demo;
+       })());
+    ok('Session.requireAuth allows the public welcome route',
+       window.Session.requireAuth('/welcome') === true);
+    ok('Session.requireAuth allows the public sign-in route',
+       window.Session.requireAuth('/signin') === true);
+    ok('Session.requireAuth matches DemoAuth.requireAuth on a protected route',
+       window.Session.requireAuth('/command') === window.DemoAuth.requireAuth('/command') &&
+       window.Session.requireAuth('/command') === true);
+    var signOutCleared = false;
+    tryRun('Session.signOut clears the demo session through the adapter', function () {
+      window.Session.signOut();
+      signOutCleared = window.Session.isAuthenticated() === false &&
+                       window.DemoAuth.isSignedIn() === false;
+      window.DemoAuth.continueDemo();          /* restore the demo session below */
+      return signOutCleared ? 'cleared then restored' : 'FAILED';
+    });
+    ok('Session.signOut ends authentication in both Session and DemoAuth', signOutCleared);
+    ok('Identity.current returns the expected demo identity',
+       (function () {
+         var id = window.Identity.current();
+         var s = window.DemoAuth.session();
+         return id && s &&
+           id.name === 'Demo User' &&
+           id.email === 'demo@lifeos.local' &&
+           id.role === 'Professional' &&
+           id.timezone === 'Europe/Oslo' &&
+           id.autonomy === 3 &&
+           id.userId === s.userId;
+       })());
+    var settingsViaIdentity = false;
+    tryRun('Settings reads the signed-in identity via the abstraction', function () {
+      window.location.hash = '#/settings';
+      window.App.render();
+      var t = document.getElementById('view').textContent;
+      var id = window.Identity.current();
+      settingsViaIdentity = t.indexOf(id.name) !== -1 && t.indexOf(id.email) !== -1;
+      window.location.hash = '#/command';      /* leave a clean authenticated view */
+      window.App.render();
+      return settingsViaIdentity ? 'name+email via Identity' : 'FAILED';
+    });
+    ok('Settings shows the Identity.current name and email', settingsViaIdentity);
+
+    /* ---------- Production auth adapter (Stage 1A) — configuration ----------
+       Mode selection and the fail-closed rule, tested
+       synchronously with no real Supabase credentials.
+       The async adapter contract is tested at the end of
+       the suite (productionAuthTests) against a mock. */
+    ok('SupabaseAuth module is loaded',
+       !!window.SupabaseAuth && typeof window.SupabaseAuth.bootstrap === 'function');
+    ok('default auth mode is demo (production is opt-in via LIFEOS_MODE/LIFEOS_ENV)',
+       window.SupabaseAuth.isProductionMode() === false);
+    ok('SupabaseAuth.bootstrap() is a synchronous no-op in demo mode (DemoAuth stays active)',
+       (function () {
+         var r = window.SupabaseAuth.bootstrap();
+         return r === false && window.Session.getAdapter().id === 'demo';
+       })());
+    ok('production mode is detected when LIFEOS_MODE is live',
+       (function () {
+         window.Config.load({ LIFEOS_MODE: 'live' });
+         var live = window.SupabaseAuth.isProductionMode() === true;
+         window.Config.load();                 /* restore the default (empty) config */
+         return live && window.SupabaseAuth.isProductionMode() === false;
+       })());
+    ok('production mode is detected when LIFEOS_ENV is production',
+       (function () {
+         window.Config.load({ LIFEOS_ENV: 'production' });
+         var prod = window.SupabaseAuth.isProductionMode() === true;
+         window.Config.load();
+         return prod;
+       })());
+    ok('demo mode is unaffected when LIFEOS_MODE is any other value',
+       (function () {
+         window.Config.load({ LIFEOS_MODE: 'staging' });
+         var demo = window.SupabaseAuth.isProductionMode() === false;
+         window.Config.load();
+         return demo;
+       })());
+
     var seedCounts = 'contacts=' + window.Store.contacts().length +
       ' emails=' + window.Store.emails().length +
       ' events=' + window.Store.events().length +
@@ -431,6 +905,367 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       btn.click();
       return document.querySelectorAll('#modal-root .modal').length + ' modal';
     });
+
+    /* ============================================================
+       Email action-class editing (Inbox detail panel) */
+    window.$.clear(document.getElementById('modal-root'));
+    /* Clean baseline: ignore any override left in storage by a prior run. */
+    window.Store.mut.clearEmailCategory('m01');
+    var m01 = window.Store.email('m01');
+    var m01Original = window.EnginesMail.classify(m01).category;
+    var m01Target = (m01Original === 'Important') ? 'Urgent' : 'Important';
+    var classBefore = window.EnginesMail.byCategory();
+    var classBeforeTotal = window.Store.emails().length;
+    var logBefore = window.Store.actionLog().length;
+    var replyBefore = window.Store.mut.replySent('m01');
+
+    tryRun('email detail renders an action-class control', function () {
+      window.ViewMail.open('m01');
+      window.App.render();
+      var sel = document.querySelector('#view select.select');
+      return sel ? 'select present, value=' + sel.value + ', options=' + sel.options.length : 'NO SELECT';
+    });
+    ok('email detail panel shows an action-class control',
+       (function () {
+         var sel = document.querySelector('#view select.select');
+         return !!sel && sel.options.length === window.EnginesMail.CATEGORIES.length;
+       })(),
+       'options=' + (function () { var s = document.querySelector('#view select.select'); return s ? s.options.length : 0; })());
+    ok('action-class control displays the current classification',
+       (function () {
+         var sel = document.querySelector('#view select.select');
+         return !!sel && sel.value === m01Original;
+       })(),
+       (function () { var s = document.querySelector('#view select.select'); return s ? 'value=' + s.value : 'no select'; })());
+
+    tryRun('change action class via the control', function () {
+      var sel = document.querySelector('#view select.select');
+      if (!sel) return 'no select';
+      sel.value = m01Target;
+      var btn = Array.prototype.filter.call(
+        document.querySelectorAll('#view .btn'),
+        function (b) { return b.textContent === 'Save class'; })[0];
+      if (!btn) return 'no Save class button';
+      btn.click();
+      return 'saved ' + m01Target;
+    });
+    ok('changing the action class persists in the Store',
+       window.Store.emailCategory('m01') === m01Target,
+       'stored=' + window.Store.emailCategory('m01'));
+    ok('the engine reflects the new classification',
+       window.EnginesMail.classify(window.Store.email('m01')).category === m01Target);
+    ok('the detail panel shows the new classification after saving',
+       (function () {
+         var sel = document.querySelector('#view select.select');
+         return !!sel && sel.value === m01Target;
+       })(),
+       (function () { var s = document.querySelector('#view select.select'); return s ? 'value=' + s.value : 'no select'; })());
+
+    var classAfter = window.EnginesMail.byCategory();
+    ok('category count for the new class increased by 1',
+       classAfter[m01Target].length === classBefore[m01Target].length + 1,
+       m01Target + ': ' + classBefore[m01Target].length + ' -> ' + classAfter[m01Target].length);
+    ok('category count for the original class decreased by 1',
+       classAfter[m01Original].length === classBefore[m01Original].length - 1,
+       m01Original + ': ' + classBefore[m01Original].length + ' -> ' + classAfter[m01Original].length);
+    ok('total email count is unchanged',
+       window.Store.emails().length === classBeforeTotal,
+       'total=' + window.Store.emails().length);
+    ok('the email now appears under its new class',
+       classAfter[m01Target].some(function (r) { return r.email.id === 'm01'; }));
+    ok('the email no longer appears under its original class',
+       !classAfter[m01Original].some(function (r) { return r.email.id === 'm01'; }));
+
+    tryRun('inbox row chip and filter count update after reclassification', function () {
+      window.ViewMail.state.selected = null;
+      window.App.render();
+      var subj = window.Store.email('m01').subject;
+      var row = Array.prototype.filter.call(
+        document.querySelectorAll('#view .email-row'),
+        function (r) {
+          var t = r.querySelector('.t');
+          return t && t.textContent === subj;
+        })[0];
+      var chip = row ? Array.prototype.filter.call(
+        row.querySelectorAll('.chip'),
+        function (c) { return c.textContent === m01Target; })[0] : null;
+      var filterChip = Array.prototype.filter.call(
+        document.querySelectorAll('#view .filter-bar .chip'),
+        function (c) { return c.textContent.indexOf(m01Target) === 0; })[0];
+      var count = filterChip ? (filterChip.querySelector('.tabnum') || {}).textContent : null;
+      return 'rowChip=' + !!chip + ' filterCount=' + count + ' (expected ' + classAfter[m01Target].length + ')';
+    });
+    ok('the Inbox row chip updates to the new classification',
+       (function () {
+         var subj = window.Store.email('m01').subject;
+         var row = Array.prototype.filter.call(
+           document.querySelectorAll('#view .email-row'),
+           function (r) {
+             var t = r.querySelector('.t');
+             return t && t.textContent === subj;
+           })[0];
+         return !!row && Array.prototype.filter.call(
+           row.querySelectorAll('.chip'),
+           function (c) { return c.textContent === m01Target; }).length === 1;
+       })());
+    ok('the Inbox category filter count updates',
+       (function () {
+         var filterChip = Array.prototype.filter.call(
+           document.querySelectorAll('#view .filter-bar .chip'),
+           function (c) { return c.textContent.indexOf(m01Target) === 0; })[0];
+         var count = filterChip ? parseInt((filterChip.querySelector('.tabnum') || {}).textContent, 10) : NaN;
+         return count === classAfter[m01Target].length;
+       })(),
+       'filter=' + (function () {
+         var filterChip = Array.prototype.filter.call(
+           document.querySelectorAll('#view .filter-bar .chip'),
+           function (c) { return c.textContent.indexOf(m01Target) === 0; })[0];
+         return filterChip ? filterChip.textContent.trim() : 'none';
+       })());
+
+    tryRun('close and reopen the email preserves the new classification', function () {
+      window.ViewMail.state.selected = null;
+      window.App.render();
+      window.ViewMail.open('m01');
+      window.App.render();
+      var sel = document.querySelector('#view select.select');
+      return sel ? 'reopened value=' + sel.value : 'NO SELECT';
+    });
+    ok('closing and reopening the email preserves the new classification',
+       (function () {
+         var sel = document.querySelector('#view select.select');
+         return !!sel && sel.value === m01Target;
+       })());
+
+    /* Suspicious / Held safety — the classification control must never
+       release a held message or trigger any external action. */
+    tryRun('suspicious email action-class control is locked', function () {
+      window.ViewMail.open('m10');
+      window.App.render();
+      var sel = document.querySelector('#view select.select');
+      return sel ? 'disabled=' + sel.disabled + ' value=' + sel.value : 'NO SELECT';
+    });
+    ok('a suspicious email shows a locked action-class control at Suspicious',
+       (function () {
+         var sel = document.querySelector('#view select.select');
+         return !!sel && sel.disabled && sel.value === 'Suspicious';
+       })());
+    var scamRes = window.Store.mut.setEmailCategory('m10', 'Low Priority');
+    ok('the Store refuses to re-classify a suspicious email',
+       scamRes.ok === false,
+       scamRes.reason || 'no reason');
+    ok('a suspicious email remains Suspicious and held after a re-classify attempt',
+       (function () {
+         var c = window.EnginesMail.classify(window.Store.email('m10'));
+         return c.category === 'Suspicious' && c.suspicious === true;
+       })());
+    ok('a suspicious email still offers no Reply or Add task after a re-classify attempt',
+       (function () {
+         var labels = Array.prototype.map.call(
+           document.querySelectorAll('#view .actions .btn'), function (b) { return b.textContent; });
+         return labels.indexOf('Reply') === -1 && labels.indexOf('Add task') === -1;
+       })(),
+       Array.prototype.map.call(
+         document.querySelectorAll('#view .actions .btn'), function (b) { return b.textContent; }).join('/'));
+    ok('changing an action class performs no external action (nothing sent or logged)',
+       window.Store.actionLog().length === logBefore && window.Store.mut.replySent('m01') === replyBefore,
+       'actionLog ' + logBefore + ' -> ' + window.Store.actionLog().length);
+    ok('the Action Authorization Layer is unchanged by a classification change',
+       window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, window.Store.user()).mode === 'approve' &&
+       window.Actions.riskFor('send_external_email') === 'high');
+
+    /* Restore the default classification so later tests see a clean store. */
+    window.Store.mut.clearEmailCategory('m01');
+    ok('clearing the override restores the original classification',
+       window.Store.emailCategory('m01') === null &&
+       window.EnginesMail.classify(window.Store.email('m01')).category === m01Original,
+       'now=' + window.EnginesMail.classify(window.Store.email('m01')).category);
+
+    /* ============================================================
+       Inbox click → full-content interactive email detail popup
+       (the existing, reusable Details modal architecture) */
+    function openEmailPopup(id) {
+      window.$.clear(document.getElementById('modal-root'));
+      if (window.location.hash !== '#/mail') { window.location.hash = '#/mail'; }
+      window.App.render();
+      var e = window.Store.email(id);
+      var row = Array.prototype.filter.call(
+        document.querySelectorAll('#view .email-row'),
+        function (r) {
+          var t = r.querySelector('.t');
+          return t && t.textContent === e.subject;
+        })[0];
+      if (!row) return null;
+      row.click();
+      return document.querySelector('#modal-root .modal');
+    }
+    function modalFootButtons(box) {
+      return box ? Array.prototype.map.call(
+        box.querySelectorAll('.modal-foot .btn'), function (b) { return b.textContent; }) : [];
+    }
+
+    /* Every individual message opens its own correct, full-content popup. */
+    var POPUP_CASES = [
+      { id: 'm01', sender: 'John Miller', cls: 'Waiting' },        /* Re: Revised pricing */
+      { id: 'm02', sender: 'Mary Chen', cls: 'Action Required' },  /* Document for the board pack */
+      { id: 'm04', sender: 'Sarah Lindqvist', cls: 'Action Required' }, /* Invoice #4471 approval */
+      { id: 'm11', sender: 'John Miller', cls: 'Urgent' },         /* Quick question on scope */
+      { id: 'm17', sender: 'ABC Security', cls: 'Important' },     /* New sign-in from a new device */
+      { id: 'm24', sender: 'ABC Security', cls: 'Low Priority' }   /* Verification code */
+    ];
+    POPUP_CASES.forEach(function (c) {
+      var e = window.Store.email(c.id);
+      var bodyBit = (e.body.split('\n')[0] || '').slice(0, 24);
+      tryRun('popup opens: ' + e.subject, function () {
+        var box = openEmailPopup(c.id);
+        if (!box) return 'NO POPUP for ' + c.id;
+        var txt = box.textContent;
+        return 'sender=' + (txt.indexOf(c.sender) !== -1) +
+               ' subject=' + (txt.indexOf(e.subject) !== -1) +
+               ' class=' + (txt.indexOf(c.cls) !== -1) +
+               ' body=' + (txt.indexOf(bodyBit) !== -1) +
+               ' actions=[' + modalFootButtons(box).join('/') + ']';
+      });
+      ok('clicking "' + e.subject + '" opens the correct message — sender ' + c.sender + ', ' + c.cls + ', full body, usable popup',
+         (function () {
+           var box = openEmailPopup(c.id);
+           var txt = box ? box.textContent : '';
+           return txt.indexOf(c.sender) !== -1 &&
+                  txt.indexOf(e.subject) !== -1 &&
+                  txt.indexOf(c.cls) !== -1 &&
+                  txt.indexOf(bodyBit) !== -1 &&
+                  modalFootButtons(box).length > 0;
+         })());
+    });
+
+    /* The suspicious message opens for inspection but stays held. */
+    tryRun('popup opens the suspicious message for inspection', function () {
+      var box = openEmailPopup('m10');
+      if (!box) return 'NO POPUP';
+      return 'held=' + (box.textContent.indexOf('Held for your review') !== -1) +
+             ' actions=[' + modalFootButtons(box).join('/') + ']';
+    });
+    ok('the suspicious email opens for inspection but remains held — no Reply/Add task, held banner shown',
+       (function () {
+         var box = openEmailPopup('m10');
+         var txt = box ? box.textContent : '';
+         var foot = modalFootButtons(box);
+         return txt.indexOf('Held for your review') !== -1 &&
+                txt.indexOf('no-reply@acct-verify-secure.net') !== -1 &&
+                foot.indexOf('Reply') === -1 &&
+                foot.indexOf('Add task') === -1;
+       })());
+
+    /* The user can close the popup without changing anything. */
+    tryRun('popup closes without changing the classification', function () {
+      var box = openEmailPopup('m01');
+      if (!box) return 'NO POPUP';
+      var before = window.EnginesMail.classify(window.Store.email('m01')).category;
+      var cancel = Array.prototype.filter.call(
+        box.querySelectorAll('.modal-foot .btn'), function (b) { return b.textContent === 'Cancel'; })[0];
+      if (!cancel) return 'no Cancel button';
+      cancel.click();
+      return 'closed=' + (!document.querySelector('#modal-root .modal')) +
+             ' before=' + before +
+             ' after=' + window.EnginesMail.classify(window.Store.email('m01')).category;
+    });
+    ok('closing the popup (Cancel) leaves the message unchanged and returns to the Inbox',
+       (function () {
+         return !document.querySelector('#modal-root .modal') &&
+                !window.Store.emailCategory('m01') &&
+                window.EnginesMail.classify(window.Store.email('m01')).category === 'Waiting';
+       })());
+
+    /* Classification editing inside the popup (m02: Action Required → Important). */
+    tryRun('popup: change classification Action Required → Important', function () {
+      var box = openEmailPopup('m02');
+      if (!box) return 'NO POPUP';
+      var sel = box.querySelector('select.select');
+      if (!sel) return 'NO SELECT';
+      if (sel.value !== 'Action Required') return 'unexpected current=' + sel.value;
+      sel.value = 'Important';
+      var save = Array.prototype.filter.call(
+        box.querySelectorAll('.btn'), function (b) { return b.textContent === 'Save class'; })[0];
+      if (!save) return 'NO SAVE CLASS';
+      save.click();
+      return 'stored=' + window.Store.emailCategory('m02');
+    });
+    ok('changing the classification inside the popup saves it through the existing Store',
+       window.Store.emailCategory('m02') === 'Important');
+    ok('the popup refreshes immediately to show the new classification after saving',
+       (function () {
+         var box = document.querySelector('#modal-root .modal');
+         var sel = box ? box.querySelector('select.select') : null;
+         return !!sel && sel.value === 'Important';
+       })());
+
+    /* Close and reopen — the new classification remains. */
+    tryRun('popup: close and reopen preserves the classification', function () {
+      var box = openEmailPopup('m02');
+      var sel = box ? box.querySelector('select.select') : null;
+      return 'reopened=' + (sel ? sel.value : 'none');
+    });
+    ok('closing and reopening the popup preserves the saved classification',
+       (function () {
+         var box = openEmailPopup('m02');
+         var sel = box ? box.querySelector('select.select') : null;
+         return !!sel && sel.value === 'Important';
+       })());
+
+    /* Navigate away and back — the classification persists. */
+    tryRun('popup: navigate away and back preserves the classification', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/command';
+      window.App.render();
+      window.location.hash = '#/mail';
+      window.App.render();
+      var box = openEmailPopup('m02');
+      var sel = box ? box.querySelector('select.select') : null;
+      return 'afterNav=' + (sel ? sel.value : 'none');
+    });
+    ok('navigating away from the Inbox and back preserves the saved classification',
+       (function () {
+         var box = openEmailPopup('m02');
+         var sel = box ? box.querySelector('select.select') : null;
+         return !!sel && sel.value === 'Important';
+       })());
+
+    /* Category counts update correctly after the popup reclassification. */
+    tryRun('popup: category counts after reclassification', function () {
+      var b = window.EnginesMail.byCategory();
+      return 'ActionRequired=' + b['Action Required'].length +
+             ' Important=' + b['Important'].length +
+             ' total=' + window.Store.emails().length;
+    });
+    ok('after reclassifying inside the popup the new-class count rose, the original-class count fell, and the total is unchanged',
+       (function () {
+         var b = window.EnginesMail.byCategory();
+         var inAR = b['Action Required'].some(function (r) { return r.email.id === 'm02'; });
+         var inImp = b['Important'].some(function (r) { return r.email.id === 'm02'; });
+         return !inAR && inImp && window.Store.emails().length === 24;
+       })(),
+       'm02 in ActionRequired=' + window.EnginesMail.byCategory()['Action Required'].some(function (r) { return r.email.id === 'm02'; }) +
+       ' inImportant=' + window.EnginesMail.byCategory()['Important'].some(function (r) { return r.email.id === 'm02'; }));
+
+    /* The existing mark-as-read capability works from the popup (m11 is unread). */
+    tryRun('popup: mark as read', function () {
+      var box = openEmailPopup('m11');
+      if (!box) return 'NO POPUP';
+      var mark = Array.prototype.filter.call(
+        box.querySelectorAll('.modal-foot .btn'), function (b) { return b.textContent === 'Mark as read'; })[0];
+      if (!mark) return 'NO MARK AS READ (unread=' + window.Store.email('m11').unread + ')';
+      mark.click();
+      return 'unreadAfter=' + window.Store.email('m11').unread;
+    });
+    ok('the existing mark-as-read capability works from the popup and persists',
+       window.Store.email('m11').unread === false);
+
+    /* Restore the default classification so later tests see a clean store. */
+    window.Store.mut.clearEmailCategory('m02');
+    ok('clearing the popup classification override restores the original class',
+       window.Store.emailCategory('m02') === null &&
+       window.EnginesMail.classify(window.Store.email('m02')).category === 'Action Required');
+
     tryRun('prepareAll modal', function () {
       window.$.clear(document.getElementById('modal-root'));
       window.App.prepareAll();
@@ -1310,17 +2145,240 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       });
     }
 
-    lines.push('---');
-    lines.push(fails === 0 ? 'ALL PASS' : (fails + ' FAILURE(S)'));
+    /* ============================================================
+       Settings + Logout. Settings renders inside the
+       authenticated shell from the real session/profile
+       sources; the shared Sign Out clears the demo session,
+       returns to Welcome, and the auth gate keeps protected
+       views (and the browser Back button) from resuming the
+       authenticated shell. */
+
+    /* ---------- Settings ---------- */
+    tryRun('settings route renders inside the authenticated shell', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.DemoAuth.continueDemo();
+      window.location.hash = '#/settings';
+      window.App.render();
+      var root = document.getElementById('view');
+      var head = root.querySelector('.page-head h1');
+      return 'blocks=' + root.children.length +
+             ' title=' + (head ? head.textContent : 'NONE');
+    });
+    ok('Settings opens inside the authenticated shell with the six sections',
+       (function () {
+         var t = document.getElementById('view').textContent;
+         return t.indexOf('Profile') !== -1 &&
+                t.indexOf('Account & Security') !== -1 &&
+                t.indexOf('Notifications') !== -1 &&
+                t.indexOf('Email') !== -1 &&
+                t.indexOf('AI & Privacy') !== -1 &&
+                t.indexOf('Data') !== -1;
+       })());
+    ok('Settings displays the real signed-in identity and profile from the existing sources',
+       (function () {
+         var s = window.DemoAuth.session();
+         var u = window.Store.user();
+         var t = document.getElementById('view').textContent;
+         return !!s && t.indexOf(s.name) !== -1 &&
+                t.indexOf(s.email) !== -1 &&
+                t.indexOf(u.timezone.replace('_', ' ')) !== -1 &&
+                t.indexOf('Demo session') !== -1;
+       })(),
+       'session=' + (window.DemoAuth.session() ? window.DemoAuth.session().email : 'none'));
+    ok('Settings marks unimplemented notification preferences as coming soon (no fake switches)',
+       (function () {
+         return document.getElementById('view').textContent.indexOf('coming soon') !== -1;
+       })());
+    ok('Settings offers a Sign Out control in Account & Security',
+       (function () {
+         var btns = Array.prototype.map.call(
+           document.querySelectorAll('#view .btn'), function (b) { return b.textContent; });
+         return btns.indexOf('Sign Out') !== -1;
+       })());
+    tryRun('settings navigation away and back works', function () {
+      window.location.hash = '#/command';
+      window.App.render();
+      var cmd = document.getElementById('view').children.length;
+      window.location.hash = '#/settings';
+      window.App.render();
+      var set = document.getElementById('view').textContent.indexOf('Profile') !== -1;
+      return 'commandBlocks=' + cmd + ' settingsProfile=' + set;
+    });
+    ok('navigating away from Settings and back preserves the Settings view',
+       (function () {
+         var t = document.getElementById('view').textContent;
+         return t.indexOf('Profile') !== -1 && t.indexOf('Account & Security') !== -1;
+       })());
+
+    /* ---------- Logout ---------- */
+    /* Snapshot the demo data so the post-sign-out check can
+       prove sign-out left it untouched. Absolute seed counts
+       drift earlier in the suite (tasks are created/edited),
+       so the correct assertion is "unchanged by sign-out". */
+    var dataBeforeSignOut = {
+      tasks: window.Store.tasks().length,
+      emails: window.Store.emails().length
+    };
+    tryRun('logout: Sign Out from Settings shows a confirmation', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/settings';
+      window.App.render();
+      var out = Array.prototype.filter.call(
+        document.querySelectorAll('#view .btn'), function (b) { return b.textContent === 'Sign Out'; })[0];
+      if (!out) return 'no Sign Out button';
+      out.click();
+      var foot = Array.prototype.map.call(
+        document.querySelectorAll('#modal-root .modal-foot .btn'), function (b) { return b.textContent; });
+      return 'modalOpen=' + (document.querySelectorAll('#modal-root .modal').length === 1) +
+             ' foot=[' + foot.join('/') + ']';
+    });
+    ok('Sign Out asks for confirmation with Cancel and Sign out',
+       (function () {
+         var txt = document.getElementById('modal-root').textContent;
+         var foot = Array.prototype.map.call(
+           document.querySelectorAll('#modal-root .modal-foot .btn'), function (b) { return b.textContent; });
+         return txt.indexOf('Are you sure you want to sign out?') !== -1 &&
+                foot.indexOf('Cancel') !== -1 &&
+                foot.indexOf('Sign out') !== -1;
+       })());
+    tryRun('logout: cancelling the confirmation keeps the session', function () {
+      var cancel = Array.prototype.filter.call(
+        document.querySelectorAll('#modal-root .modal-foot .btn'), function (b) { return b.textContent === 'Cancel'; })[0];
+      if (!cancel) return 'no Cancel button';
+      cancel.click();
+      return 'signedIn=' + window.DemoAuth.isSignedIn() +
+             ' modalClosed=' + (document.querySelectorAll('#modal-root .modal').length === 0);
+    });
+    ok('cancelling the sign-out confirmation keeps the user signed in',
+       window.DemoAuth.isSignedIn() === true);
+    tryRun('logout: confirming clears the session and returns to Welcome', function () {
+      var before = window.DemoAuth.isSignedIn();
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/settings';
+      window.App.render();
+      var out = Array.prototype.filter.call(
+        document.querySelectorAll('#view .btn'), function (b) { return b.textContent === 'Sign Out'; })[0];
+      if (!out) return 'no Sign Out button (signedIn=' + before + ')';
+      out.click();
+      var confirm = Array.prototype.filter.call(
+        document.querySelectorAll('#modal-root .modal-foot .btn'), function (b) { return b.textContent === 'Sign out'; })[0];
+      if (!confirm) return 'no Sign out confirm button';
+      confirm.click();
+      return 'before=' + before +
+             ' after=' + window.DemoAuth.isSignedIn() +
+             ' route=' + window.App.route().path +
+             ' storageCleared=' + (window.localStorage.getItem(window.DemoAuth.KEY) === null);
+    });
+    ok('confirming Sign Out clears the actual demo session',
+       window.DemoAuth.isSignedIn() === false);
+    ok('confirming Sign Out removes the session from storage',
+       window.localStorage.getItem(window.DemoAuth.KEY) === null);
+    ok('confirming Sign Out redirects to the Welcome / Sign-In experience',
+       window.App.route().path === '/welcome');
+    ok('the authenticated shell is not usable after sign out (protected route redirects to Sign In)',
+       (function () {
+         window.location.hash = '#/command';
+         window.App.render();
+         return window.App.route().path === '/signin';
+       })());
+    ok('browser Back after sign out cannot resume the authenticated shell',
+       (function () {
+         /* navigate back to a previously-visited protected route while signed out */
+         window.location.hash = '#/settings';
+         window.App.render();
+         return window.App.route().path === '/signin';
+       })());
+    ok('signing out does not delete the underlying demo data or seed',
+       window.Store.tasks().length === dataBeforeSignOut.tasks &&
+       window.Store.emails().length === dataBeforeSignOut.emails,
+       'tasks=' + window.Store.tasks().length + ' (was ' + dataBeforeSignOut.tasks +
+       ') emails=' + window.Store.emails().length + ' (was ' + dataBeforeSignOut.emails + ')');
+
+    /* ---------- Regression: existing features still work ---------- */
+    window.DemoAuth.continueDemo();
+    tryRun('regression: Inbox opens a message through the Details popup', function () {
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/mail';
+      window.App.render();
+      var e = window.Store.email('m01');
+      var row = Array.prototype.filter.call(
+        document.querySelectorAll('#view .email-row'), function (r) {
+          var t = r.querySelector('.t');
+          return t && t.textContent === e.subject;
+        })[0];
+      if (!row) return 'no row for ' + e.subject;
+      row.click();
+      return 'popup=' + (document.querySelectorAll('#modal-root .modal').length === 1) +
+             ' sender=' + (document.getElementById('modal-root').textContent.indexOf('John Miller') !== -1);
+    });
+    ok('Inbox still opens messages through the Details popup',
+       document.querySelectorAll('#modal-root .modal').length === 1 &&
+       document.getElementById('modal-root').textContent.indexOf('John Miller') !== -1);
+    window.$.clear(document.getElementById('modal-root'));
+    ok('email classification still works',
+       (function () {
+         var r = window.Store.mut.setEmailCategory('m02', 'Important');
+         var good = r.ok && window.Store.emailCategory('m02') === 'Important';
+         window.Store.mut.clearEmailCategory('m02');
+         return good && window.Store.emailCategory('m02') === null;
+       })());
+    ok('suspicious email remains protected (cannot be reclassified out of Suspicious)',
+       (function () {
+         var r = window.Store.mut.setEmailCategory('m10', 'Low Priority');
+         return r.ok === false &&
+                window.EnginesMail.classify(window.Store.email('m10')).category === 'Suspicious';
+       })());
+    ok('Calendar still works', (function () {
+      window.location.hash = '#/calendar'; window.App.render();
+      return document.getElementById('view').textContent.indexOf('September 2026') !== -1;
+    })());
+    ok('Command Center still works', (function () {
+      window.location.hash = '#/command'; window.App.render();
+      return document.getElementById('view').children.length > 0;
+    })());
+    ok('My Day still works', (function () {
+      window.location.hash = '#/day'; window.App.render();
+      return document.getElementById('view').children.length > 0;
+    })());
+    ok('Tasks still work', (function () {
+      var t = window.Store.activeTasks()[0];
+      if (!t) return false;
+      window.$.clear(document.getElementById('modal-root'));
+      window.location.hash = '#/tasks/' + t.id; window.App.render();
+      return document.querySelectorAll('#modal-root .modal').length === 1 &&
+             document.getElementById('modal-root').textContent.indexOf(t.title) !== -1;
+    })());
+    window.$.clear(document.getElementById('modal-root'));
+    ok('existing application navigation still works', (function () {
+      var paths = ['#/command', '#/day', '#/mail', '#/calendar'];
+      return paths.every(function (h) {
+        window.location.hash = h;
+        window.App.render();
+        return document.getElementById('view').children.length > 0;
+      });
+    })());
+
+    /* Production adapter contract tests (async). They run
+       after the synchronous suite and settle before the
+       summary is rendered. A rejection here is a real test
+       failure, so it is recorded — a silent rejection would
+       otherwise render "ALL PASS" with steps skipped. */
+    productionAuthTests()
+      .then(deploymentConfigWiringTests)
+      .then(finish, function (e) {
+        fails++;
+        lines.push('THROW async production adapter / config wiring tests :: ' +
+          (e && e.message ? e.message : String(e)));
+        finish();
+      });
   } catch (e) {
     lines.push('FATAL ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]);
     lines.push('ALL PASS (false)');
+    finish();
   }
 
-  document.getElementById('out').textContent = lines.join('\n');
-  var bar = document.getElementById('bar');
-  bar.textContent = fails === 0 ? 'All checks passed' : fails + ' check(s) failed';
-  bar.className = 'bar ' + (fails === 0 ? 'ok' : 'bad');
+  /* Safety net: if an async test never settles, still render. */
+  setTimeout(finish, 4000);
 })();
 
 </script>

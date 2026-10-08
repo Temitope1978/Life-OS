@@ -406,6 +406,7 @@ button, input, select, textarea { font-family: inherit; }
 .card.detail { align-self: start; position: sticky; top: 24px; }
 .email-row { align-items: center; }
 .email-row.selected { background: var(--primary-soft); }
+.email-row.unread .t { font-weight: 700; }
 .email-body { font-size: 14px; line-height: 1.65; color: var(--text); }
 
 /* ---------- Day strip ---------- */

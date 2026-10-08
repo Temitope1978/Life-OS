@@ -36,6 +36,7 @@
     <a href="#/commitments" data-nav="commitments"><span class="ic">⚑</span> Commitments <span class="badge" id="badge-commit"></span></a>
     <a href="#/waiting"  data-nav="waiting"><span class="ic">◷</span> Waiting For</a>
     <a href="#/control"  data-nav="control"><span class="ic">⚙</span> Control Center</a>
+    <a href="#/settings" data-nav="settings"><span class="ic">☰</span> Settings</a>
 
     <div class="sim-note">
       <strong style="color:#cfc3e6">Simulation</strong><br>
@@ -56,6 +57,20 @@
 <!-- ============ Seed data (must load first; also works over file://) ============ -->
 <script src="assets/js/data/seed.js"></script>
 
+<!-- ============ Production configuration (deploy-time) ============ -->
+<!-- env.js is generated at deploy time by .github/workflows/deploy-pages.yml
+     and is gitignored. It MUST load before config.js, which reads
+     window.__LIFEOS_ENV__ during startup. When absent (local development)
+     the app runs in DEMO MODE. It contains ONLY the browser-safe values
+     LIFEOS_MODE, SUPABASE_URL and SUPABASE_ANON_KEY — never any secret. -->
+<script src="assets/js/env.js"></script>
+<!-- Official Supabase client SDK — pinned version with SRI integrity.
+     This is a PUBLIC library and carries NO secrets. It must be present
+     before SupabaseAuth attempts to create a client. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"
+        integrity="sha384-BWcjm9OdFth9TbhCxZPdm+gAOUMAzQy9nmTs12ioXdCcbVnJaPMn+fMUoQCLt60R"
+        crossorigin="anonymous"></script>
+
 <!-- ============ Core ============ -->
 <script src="assets/js/core/dates.js"></script>
 <script src="assets/js/core/seam.js"></script>
@@ -65,6 +80,15 @@
     <script src="assets/js/core/providers.js"></script>
     <script src="assets/js/core/oauth.js"></script>
     <script src="assets/js/core/demo-auth.js"></script>
+    <script src="assets/js/core/session.js"></script>
+    <script src="assets/js/core/identity.js"></script>
+    <script src="assets/js/core/supabase-auth.js"></script>
+
+    <!-- OPTIONAL (deployments only): load the official Supabase client
+         and set window.__LIFEOS_ENV__ = { LIFEOS_MODE:'live',
+         SUPABASE_URL:'https://<ref>.supabase.co', SUPABASE_ANON_KEY:'<anon>' }
+         to enable production auth. Without this, the app runs in demo mode.
+         NEVER put the service-role key, DB password, or any secret here. -->
 
     <!-- ============ Engines ============ -->
 <script src="assets/js/engines/mail.js"></script>
@@ -89,6 +113,7 @@
 <script src="assets/js/ui/views/search.js"></script>
 <script src="assets/js/ui/views/commitments.js"></script>
 <script src="assets/js/ui/views/control.js"></script>
+    <script src="assets/js/ui/views/settings.js"></script>
 <script src="assets/js/ui/views/auth.js"></script>
 <script src="assets/js/app.js"></script>
 

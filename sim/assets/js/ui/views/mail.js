@@ -27,8 +27,8 @@
   function emailRow(r, onOpen) {
     var e = r.email;
     var kind = { 'Urgent': 'danger', 'Action Required': 'warn', 'Important': 'acc', 'Suspicious': 'danger' }[r.category] || 'muted';
-    return el('div.item.click.email-row', {
-      class: state.selected === e.id ? 'selected' : ''
+    var row = el('div.item.click.email-row', {
+      class: (state.selected === e.id ? 'selected ' : '') + (e.unread ? 'unread' : '')
     }, [
       window.UI.avatar(e.contactId),
       el('div.grow', [
@@ -42,6 +42,96 @@
     ]);
     row.onclick = function () { onOpen(e.id); };
     return row;
+  }
+
+  /** Action-class editor for the email detail panel. Shows the current
+      classification and lets the user pick another from the existing
+      vocabulary. A Suspicious/Held message is locked — it can never be
+      re-classified out of Suspicious. Saving is a local data change
+      only; it never sends, replies, deletes, archives or forwards. */
+  function classEditor(e, r, ctx) {
+    var held = !!(r.suspicious || r.category === 'Suspicious');
+    var sel = el('select.select', window.EnginesMail.CATEGORIES.map(function (c) {
+      return el('option', { value: c, text: c });
+    }));
+    sel.value = r.category;
+    sel.disabled = held;
+    var save = window.UI.btnSm('Save class', 'primary', function () {
+      var res = window.Store.mut.setEmailCategory(e.id, sel.value);
+      if (!res.ok) { window.UI.toast(res.reason || 'Cannot save the action class', 'err'); return; }
+      window.UI.toast('Action class set to ' + res.category, 'ok');
+      /* Inside the Details popup, refresh it so the new class is
+         visible at once; the inline panel re-renders itself via the
+         store's change notification. */
+      if (ctx) { ctx.swap(); window.Details.open({ kind: 'email', ref: e.id }, ctx.opts); }
+    });
+    save.disabled = held;
+    return el('div.field', [
+      el('label', { text: 'Action class' }),
+      el('div.row', [
+        sel,
+        save,
+        held ? window.UI.chip('Held', 'danger') : null
+      ].filter(Boolean)),
+      held ? el('div.s.faint', {
+        text: 'Suspicious messages are held, never acted on — they cannot be re-classified. Use the scam review below.'
+      }) : null
+    ].filter(Boolean));
+  }
+
+  /** The actions available on an opened email. These are the existing,
+      permitted Life OS email actions only — nothing here sends, replies,
+      deletes, archives or forwards on its own; the reply path always goes
+      through the Action Authorization Layer (draftFor → sendEmailAuthorized),
+      and a Suspicious/Held message is offered no reply or task path. */
+  function emailActions(e, r, ctx) {
+    function refresh() {
+      if (ctx) { ctx.swap(); window.Details.open({ kind: 'email', ref: e.id }, ctx.opts); }
+    }
+    if (r.category === 'Suspicious') {
+      /* Held messages offer no reply or task path — acting on them is the
+         exact failure this safeguard exists to prevent. */
+      return [
+        window.UI.btnSm('This is a scam', 'danger', function () {
+          window.Store.mut.markScam(e.id, true);
+          window.UI.toast('Marked as scam. Reminder suppressed.');
+          refresh();
+        }),
+        window.UI.btnSm('Mark as safe', 'ghost', function () {
+          window.Store.mut.markScam(e.id, false);
+          window.UI.toast('Marked safe — it will be triaged normally', 'ok');
+          refresh();
+        })
+      ];
+    }
+    var acts = [];
+    acts.push(window.Store.mut.replySent(e.id)
+      ? window.UI.chip('Reply sent', 'success')
+      : window.UI.btnSm('Reply', 'primary', function () {
+          /* Only ever a draft until the user sends it, and sending
+             runs the Action Authorization Layer. */
+          draftFor(e, r);
+        }));
+    acts.push(window.UI.btnSm('Add task', 'secondary', function () {
+      window.Store.mut.addTask({
+        title: 'Reply: ' + e.subject,
+        project: 'Client work',
+        dueDate: window.D.today(),
+        priority: r.category === 'Urgent' ? 'high' : 'medium',
+        source: { type: 'email', ref: e.id },
+        contactId: e.contactId
+      });
+      window.UI.toast('Task added from email');
+      refresh();
+    }));
+    if (e.unread) {
+      acts.push(window.UI.btnSm('Mark as read', 'ghost', function () {
+        window.Store.mut.markEmailRead(e.id);
+        window.UI.toast('Marked as read', 'ok');
+        refresh();
+      }));
+    }
+    return acts;
   }
 
   function detail(e, r, onClose) {
@@ -59,7 +149,7 @@
             text: 'To: ' + window.Store.user().name + ' (' + window.Store.user().email + ') · no attachments'
           })
         ]),
-        el('div.actions', [window.UI.categoryChip(r.category), window.UI.btnSm('Close', 'ghost', onClose)])
+        el('div.actions', [window.UI.chip(e.unread ? 'Unread' : 'Read', e.unread ? 'warn' : 'muted'), window.UI.categoryChip(r.category), window.UI.btnSm('Close', 'ghost', onClose)])
       ])
     ]));
 
@@ -82,38 +172,9 @@
       flags,
       el('div.email-body', { html: window.$.esc(e.body).replace(/\n\n/g, '<br><br>') }),
       el('div.divider'),
+      classEditor(e, r),
       el('div.s.faint', { text: 'Classification: ' + r.reason }),
-      el('div.actions', r.category === 'Suspicious' ? [
-        /* Held messages offer no reply or task path — acting on them is the
-           exact failure this safeguard exists to prevent. */
-        window.UI.btnSm('This is a scam', 'danger', function () {
-          window.Store.mut.markScam(e.id, true);
-          window.UI.toast('Marked as scam. Reminder suppressed.');
-        }),
-        window.UI.btnSm('Mark as safe', 'ghost', function () {
-          window.Store.mut.markScam(e.id, false);
-          window.UI.toast('Marked safe — it will be triaged normally', 'ok');
-        })
-      ] : [
-        /* Send-once: once an AI-drafted reply has been sent, the
-           thread shows a sent state instead of offering another send. */
-        window.Store.mut.replySent(e.id)
-          ? window.UI.chip('Reply sent', 'success')
-          : window.UI.btnSm('Reply', 'primary', function () {
-              draftFor(e, r);
-            }),
-        window.UI.btnSm('Add task', 'secondary', function () {
-          window.Store.mut.addTask({
-            title: 'Reply: ' + e.subject,
-            project: 'Client work',
-            dueDate: window.D.today(),
-            priority: r.category === 'Urgent' ? 'high' : 'normal',
-            source: { type: 'email', ref: e.id },
-            contactId: e.contactId
-          });
-          window.UI.toast('Task added from email');
-        })
-      ].filter(Boolean))
+      el('div.actions', emailActions(e, r))
     ]));
 
     return wrap;
@@ -226,8 +287,10 @@
     } else {
       visible.forEach(function (r) {
         body.appendChild(emailRow(r, function (id) {
-          state.selected = id;
-          window.App.render();
+          /* Clicking a message opens the existing reusable full-content
+             Details popup — not merely the inline preview. The inline
+             panel stays available via #/mail/<id> ("Open in Inbox"). */
+          window.Details.open({ kind: 'email', ref: id });
         }));
       });
     }
@@ -248,6 +311,11 @@
   window.ViewMail = {
     view: render,
     open: function (id) { state.selected = id; state.filter = 'All'; window.App.go('#/mail/' + id); },
-    state: state
+    state: state,
+    /* Reused by the shared Details popup so the classification editor
+       and the permitted email actions live in exactly one place (no
+       second classification system, no duplicated action set). */
+    classEditor: classEditor,
+    emailActions: emailActions
   };
 })();

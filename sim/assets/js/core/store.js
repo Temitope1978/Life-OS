@@ -21,6 +21,7 @@
       commitmentDecisions: {},/* id -> { confirmed, rejected, editedDesc, decidedAt } */
       meetingStates: {},      /* id -> { prepDone, transcript }                      */
       emailRead: {},          /* id -> true                                          */
+      emailCategory: {},      /* id -> category (user re-classification override)    */
       scamFlagged: {},        /* id -> true (user confirmed a scam)                 */
       repliesSent: {},        /* id -> text                                          */
       eventPrep: {},          /* id -> true                                          */
@@ -178,6 +179,8 @@
     for (var i = 0; i < all.length; i++) if (all[i].id === id) return all[i];
     return null;
   }
+  /** The user's persisted re-classification for an email, if any. */
+  function emailCategory(id) { return state.mutable.emailCategory[id] || null; }
 
   function documents() {
     return seed().documents.map(function (d) {
@@ -289,6 +292,29 @@
       commit();
     },
     markEmailRead: function (id) { state.mutable.emailRead[id] = true; commit(); },
+    /** Re-classify an email. A local data change only — it never sends,
+        replies, deletes, archives or forwards anything, and it never
+        touches the Action Authorization Layer. Suspicious messages are
+        held: they can never be re-classified out of Suspicious (the
+        engine ignores any such override too, so this is defence in
+        depth, not the only safeguard). */
+    setEmailCategory: function (id, category) {
+      var e = email(id);
+      if (!e) return { ok: false, reason: 'Unknown message.' };
+      if (window.EnginesMail && window.EnginesMail.classify(e).suspicious) {
+        return { ok: false, reason: 'Held as suspicious — it cannot be re-classified.' };
+      }
+      if (!window.EnginesMail || window.EnginesMail.CATEGORIES.indexOf(category) === -1) {
+        return { ok: false, reason: 'Unknown action class.' };
+      }
+      state.mutable.emailCategory[id] = category;
+      commit();
+      return { ok: true, category: category };
+    },
+    clearEmailCategory: function (id) {
+      delete state.mutable.emailCategory[id];
+      commit();
+    },
     markScam: function (id) {
       state.mutable.scamFlagged[id] = true;
       state.mutable.processed['fgt-mail-' + id] = true;
@@ -547,7 +573,7 @@
     followUps: followUps,
     meetings: meetings, meeting: meeting,
     events: events, event: event,
-    emails: emails, email: email,
+    emails: emails, email: email, emailCategory: emailCategory,
     documents: documents, document: document,
     integrations: integrations,
     oneTouchTemplates: oneTouchTemplates,

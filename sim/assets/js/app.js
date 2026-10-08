@@ -273,7 +273,7 @@
        session. #/command is kept valid — it redirects to #/signin
        when unsigned in and opens the existing Command Center,
        unchanged, when signed in. */
-    if (!window.DemoAuth.requireAuth(r.path)) {
+    if (!window.Session.requireAuth(r.path)) {
       go('#/signin');
       return;
     }
@@ -300,6 +300,7 @@
       case '/commitments':
       case '/waiting':   window.ViewCommitments.view(root); break;
       case '/control':   window.ViewControl.view(root); break;
+      case '/settings':  window.ViewSettings.view(root); break;
       case '/oauth':     oauthCallback(r.params); break;
       case '/tasks':     taskModal(r.params[0]); break;
       case '/contacts':  contactModal(r.params[0]); break;
@@ -321,14 +322,38 @@
     });
   }
 
-  /* ---------- Boot ---------- */
+  /* ---------- Boot ----------
+     The synchronous part (store init, hashchange listener,
+     render, keydown) runs immediately. The initial route
+     decision waits for SupabaseAuth.bootstrap(): in demo
+     mode that is a synchronous no-op (returns false), so
+     boot finishes synchronously exactly as before; in
+     production mode it returns a Promise that resolves
+     once the stored Supabase session has been restored, so
+     the protected/protected decision sees the real session
+     before the first render. SupabaseAuth.bootstrap() is
+     fail-closed — it never activates the demo adapter. */
+  function finalizeBoot() {
+    if (!location.hash) location.hash = window.Session.isAuthenticated() ? '#/command' : '#/welcome';
+    render();
+  }
+
   function boot() {
     window.Store.init();
     window.Store.subscribe(function () { render(); });
 
     window.addEventListener('hashchange', render);
-    if (!location.hash) location.hash = window.DemoAuth.isSignedIn() ? '#/command' : '#/welcome';
-    render();
+
+    var auth = (window.SupabaseAuth && typeof window.SupabaseAuth.bootstrap === 'function')
+      ? window.SupabaseAuth.bootstrap()
+      : false;
+    if (auth && typeof auth.then === 'function') {
+      /* Production mode: restore the session first. */
+      auth.then(finalizeBoot, finalizeBoot);
+    } else {
+      /* Demo mode (default): finish synchronously. */
+      finalizeBoot();
+    }
 
     document.addEventListener('keydown', function (e) {
       if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
@@ -336,6 +361,30 @@
         var bar = document.querySelector('.cmd-bar input');
         if (bar) bar.focus();
       }
+    });
+  }
+
+  /* ---------- Sign Out ----------
+     One shared, confirmed sign-out used by Settings and by
+     the Control Center account area. It clears the demo
+     session (the only auth state) and returns to the
+     Welcome landing. The render() auth gate — not this
+     function — is what keeps protected views unreachable
+     afterwards, including via the browser Back button. */
+  function signOut() {
+    var m = window.UI.modal({
+      title: 'Sign out?',
+      body: el('p', { text: 'Are you sure you want to sign out?' }),
+      actions: [
+        window.UI.btn('Sign out', 'danger', function () {
+          m.close();
+          window.Session.signOut();         /* delegates to the active adapter */
+          var prod = (window.SupabaseAuth && typeof window.SupabaseAuth.isProductionMode === 'function')
+            ? window.SupabaseAuth.isProductionMode() : false;
+          window.UI.toast(prod ? 'Signed out' : 'Signed out — demo session cleared', 'ok');
+          go('#/welcome');                   /* Welcome / Sign-In landing */
+        })
+      ]
     });
   }
 
@@ -349,6 +398,7 @@
     openEventBrief: openEventBrief,
     prepareAll: prepareAll,
     badges: badges,
+    signOut: signOut,
     boot: boot
   };
 

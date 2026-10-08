@@ -55,10 +55,15 @@
     var u = window.Store.user();
     var suspicious = r.category === 'Suspicious';
     var related = window.EnginesTasks.tasksFromEmail(e.id);
+    /* The classification editor and the permitted email actions are
+       provided by the mail view (window.ViewMail) so there is exactly
+       one implementation, shared by this popup and the inline panel. */
+    var hasMailView = !!(window.ViewMail && window.ViewMail.classEditor && window.ViewMail.emailActions);
 
     var body = el('div.stack', [
       el('div.row', [
         window.UI.categoryChip(r.category),
+        window.UI.chip(e.unread ? 'Unread' : 'Read', e.unread ? 'warn' : 'muted'),
         el('span.s', { text: window.D.formatDateTime(e.received) + (c && c.org ? ' · ' + c.org : '') })
       ]),
       field('From', c ? c.name + ' · ' + c.org + ' · ' + c.email : (e.external || 'External sender')),
@@ -68,6 +73,7 @@
       }) : null,
       el('div.email-body', { html: esc(e.body).replace(/\n/g, '<br>') }),
       el('div.divider'),
+      hasMailView ? window.ViewMail.classEditor(e, r, ctx) : null,
       field('Classification', r.reason),
       related.length ? el('div', [
         el('div.t-cap', { text: 'Related actions' }),
@@ -80,24 +86,7 @@
       ]) : null
     ].filter(Boolean));
 
-    var actions = [];
-    if (!suspicious) {
-      actions.push(el('button.btn.btn-secondary', {
-        type: 'button', text: 'Add task', onclick: function () {
-          window.Store.mut.createTask({
-            title: 'Reply: ' + e.subject,
-            project: 'Client work',
-            dueDate: window.D.today(),
-            priority: r.category === 'Urgent' ? 'high' : 'medium',
-            source: { type: 'email', ref: e.id },
-            contactId: e.contactId
-          });
-          window.UI.toast('Task added from email', 'ok');
-          ctx.swap();
-          window.App.render();
-        }
-      }));
-    }
+    var actions = hasMailView ? window.ViewMail.emailActions(e, r, ctx) : [];
     actions.push(el('button.btn.btn-ghost', {
       type: 'button', text: 'Open in Inbox', onclick: function () {
         ctx.swap();

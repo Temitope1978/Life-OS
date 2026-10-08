@@ -12,3 +12,9 @@ Thumbs.db
 *.docm
 
 supabase/.temp/
+
+# Generated at deploy time — browser-safe runtime configuration.
+# NEVER commit: produced by .github/workflows/deploy-pages.yml from
+# the SUPABASE_URL / SUPABASE_ANON_KEY repository secrets. The tracked
+# template is sim/assets/js/env.example.js.
+sim/assets/js/env.js

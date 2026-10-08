@@ -30,6 +30,40 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # [Stage 1B] Generate the browser-safe runtime config at deploy
+      # time. The generated sim/assets/js/env.js is gitignored and is
+      # NEVER committed. The browser receives ONLY the three
+      # browser-safe values below — no service-role key, no database
+      # URL or password, no JWT secret, no OAuth client secret and no
+      # other server-side key is ever written to env.js or sent to the
+      # browser. Secret values reach this step only through masked
+      # step-level environment variables and are written to the file
+      # with an unquoted heredoc; nothing is printed to the logs.
+      - name: Generate browser-safe runtime config (env.js)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          cat > sim/assets/js/env.js <<EOF
+          window.__LIFEOS_ENV__ = {
+            LIFEOS_MODE: 'live',
+            SUPABASE_URL: '${SUPABASE_URL}',
+            SUPABASE_ANON_KEY: '${SUPABASE_ANON_KEY}'
+          };
+          EOF
+          # Confirm the file was written without printing its contents.
+          test -s sim/assets/js/env.js
+
+      # [Stage 1B] Guard: fail the deploy if any server-only key NAME
+      # ever leaked into the generated config. Matches key names only,
+      # never values.
+      - name: Guard against server-only secrets in env.js
+        run: |
+          if grep -Eq 'SERVICE_ROLE|DB_URL|DB_PASSWORD|JWT_SECRET|CLIENT_SECRET' sim/assets/js/env.js; then
+            echo "env.js must contain only browser-safe keys" >&2
+            exit 1
+          fi
+
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
 

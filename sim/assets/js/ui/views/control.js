@@ -370,12 +370,12 @@
                   'Everything you approve is stored in this browser under "lifeos.sim.v1".'
           }),
           el('div.row', [
+            window.UI.btnSm('Settings', 'secondary', function () { window.App.go('#/settings'); }),
             window.UI.btnSm('Sign Out', 'danger', function () {
-              /* Clears only the demo session (lifeos_demo_session).
-                 The underlying demo data and seed are untouched. */
-              window.DemoAuth.signOut();
-              window.UI.toast('Signed out — demo session cleared', 'ok');
-              window.App.go('#/signin');
+              /* Shared, confirmed sign-out — clears only the demo
+                 session (lifeos_demo_session). The underlying demo
+                 data and seed are untouched. */
+              window.App.signOut();
             })
           ])
         ]),

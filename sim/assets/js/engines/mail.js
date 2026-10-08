@@ -16,6 +16,11 @@
   var URGENCY_WORDS = ['urgent', 'suspended', 'verify', 'immediately', 'within 24 hours',
                        'failure to comply', 'permanently'];
 
+  /* The complete action-class vocabulary — the single source of truth
+     for what an email may be classified as. */
+  var CATEGORIES = ['Urgent', 'Action Required', 'Important', 'Waiting',
+                    'Newsletter', 'Promotion', 'Low Priority', 'Suspicious'];
+
   function lower(s) { return String(s || '').toLowerCase(); }
   function countMatches(text, words) {
     var hits = [];
@@ -24,10 +29,10 @@
   }
 
   /**
-   * Classify one email.
+   * Classify one email from its content (rules R-1…R-7).
    * @returns {{category,confidence,reason,source,actionRequired,suspicious}}
    */
-  function classify(email) {
+  function baseClassify(email) {
     var subj = lower(email.subject);
     var body = lower(email.body);
     var prev = lower(email.preview);
@@ -138,6 +143,33 @@
     };
   }
 
+  /**
+   * Classify one email, applying any persisted user re-classification.
+   *
+   * A user override changes only the category label. It can never
+   * release a Suspicious message: the content-derived `suspicious`
+   * flag stays authoritative, so a held email is always returned as
+   * Suspicious regardless of any stored override. Re-classifying is a
+   * local data change only — it sends, replies, deletes, archives or
+   * forwards nothing, and never touches the Action Authorization Layer.
+   */
+  function classify(email) {
+    var base = baseClassify(email);
+    var override = (window.Store && typeof window.Store.emailCategory === 'function')
+      ? window.Store.emailCategory(email.id) : null;
+    if (override && CATEGORIES.indexOf(override) !== -1 && !base.suspicious) {
+      return {
+        category: override,
+        confidence: base.confidence,
+        reason: 'Re-classified by you — the AI had suggested "' + base.category + '".',
+        source: base.source,
+        actionRequired: base.actionRequired,
+        suspicious: false
+      };
+    }
+    return base;
+  }
+
   function isMarketing(fromLine, all) {
     return countMatches(fromLine, MARKETING).length >= 1 || /unsubscribe/.test(all);
   }
@@ -176,6 +208,7 @@
   window.EnginesMail = {
     classify: classify,
     classifyAll: classifyAll,
-    byCategory: byCategory
+    byCategory: byCategory,
+    CATEGORIES: CATEGORIES
   };
 })();
