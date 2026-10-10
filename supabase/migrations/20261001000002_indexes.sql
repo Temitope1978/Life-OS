@@ -1,8 +1,8 @@
-# AI Life OS — indexes
-# Derived decisions 28–30 in DATABASE-DESIGN-DECISIONS.md §7.
-# Every RLS predicate filters on user_id, so those indexes are the hottest path in
-# the system. Composite indexes are ordered (user_id, …) so they serve both RLS and
-# the Phase 5 engine queries.
+-- AI Life OS — indexes
+-- Derived decisions 28–30 in DATABASE-DESIGN-DECISIONS.md §7.
+-- Every RLS predicate filters on user_id, so those indexes are the hottest path in
+-- the system. Composite indexes are ordered (user_id, …) so they serve both RLS and
+-- the Phase 5 engine queries.
 
 -- --- isolation-critical: user_id on every table ---
 create index if not exists idx_workspaces_owner_id      on public.workspaces (owner_id);

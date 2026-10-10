@@ -52,7 +52,7 @@
   /** "15 Sept" */
   function formatShort(isoStr) {
     var d = parse(isoStr);
-    if (!d) return '';
+    if (!d || isNaN(d.getTime())) return '';
     return d.getDate() + ' ' + MONTHS[d.getMonth()].slice(0, 4);
   }
   /** Relative due label: "Overdue 4 days" / "Today" / "Tomorrow" / "in 3 days" / "Friday" */
@@ -91,7 +91,7 @@
   function formatDateTime(ts) {
     if (!ts) return '';
     var d = parse(String(ts).slice(0, 10));
-    if (!d) return '';
+    if (!d || isNaN(d.getTime())) return '';
     return formatShort(String(ts).slice(0, 10)) + ', ' + String(ts).slice(11, 16);
   }
   /** "Tue" */

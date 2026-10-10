@@ -1,16 +1,16 @@
-# AI Life OS — Row Level Security
-#
-# §53: "The system must never expose one user's data to another user."
-#
-# Derived decisions 31–39 in DATABASE-DESIGN-DECISIONS.md §8.
-#
-# Shape of every policy:
-#   * `user_id = (select auth.uid())` — the scalar subquery lets the planner evaluate
-#     auth.uid() once as an InitPlan instead of per row. On a per-row RLS predicate
-#     that is a measurable difference (decision 32).
-#   * FORCE ROW LEVEL SECURITY — without it the table owner bypasses policies
-#     entirely (decision 31).
-#   * `anon` is revoked outright; only `authenticated` gets row access (decision 36).
+-- AI Life OS — Row Level Security
+--
+-- §53: "The system must never expose one user's data to another user."
+--
+-- Derived decisions 31–39 in DATABASE-DESIGN-DECISIONS.md §8.
+--
+-- Shape of every policy:
+--   * `user_id = (select auth.uid())` — the scalar subquery lets the planner evaluate
+--     auth.uid() once as an InitPlan instead of per row. On a per-row RLS predicate
+--     that is a measurable difference (decision 32).
+--   * FORCE ROW LEVEL SECURITY — without it the table owner bypasses policies
+--     entirely (decision 31).
+--   * `anon` is revoked outright; only `authenticated` gets row access (decision 36).
 
 -- ---------------------------------------------------------------------------
 -- Grants: least privilege (§53)
@@ -90,23 +90,23 @@ begin
     execute format('alter table public.%I force row level security', t);
 
     execute format($f$
-      create policy %1$I on public.%1$I for select
+      create policy %1$I_select on public.%1$I for select
         using (user_id = (select auth.uid()));
     $f$, t);
 
     execute format($f$
-      create policy %1$I on public.%1$I for insert
+      create policy %1$I_insert on public.%1$I for insert
         with check (user_id = (select auth.uid()));
     $f$, t);
 
     execute format($f$
-      create policy %1$I on public.%1$I for update
+      create policy %1$I_update on public.%1$I for update
         using      (user_id = (select auth.uid()))
         with check (user_id = (select auth.uid()));
     $f$, t);
 
     execute format($f$
-      create policy %1$I on public.%1$I for delete
+      create policy %1$I_delete on public.%1$I for delete
         using (user_id = (select auth.uid()));
     $f$, t);
   end loop;

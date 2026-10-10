@@ -152,6 +152,8 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       },
       _setCurrent: function (id) { currentUserId = id; },
       _queried: function () { return Object.keys(queried); },
+      _setExpiresAt: function (val) { if (currentUserId && sessions[currentUserId]) sessions[currentUserId].expires_at = val; },
+      _setCreatedAt: function (val) { if (currentUserId && sessions[currentUserId]) sessions[currentUserId].created_at = val; },
 
       auth: {
         getSession: function () {
@@ -2358,19 +2360,75 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       });
     })());
 
-    /* Production adapter contract tests (async). They run
-       after the synchronous suite and settle before the
-       summary is rendered. A rejection here is a real test
-       failure, so it is recorded — a silent rejection would
-       otherwise render "ALL PASS" with steps skipped. */
-    productionAuthTests()
-      .then(deploymentConfigWiringTests)
-      .then(finish, function (e) {
-        fails++;
-        lines.push('THROW async production adapter / config wiring tests :: ' +
-          (e && e.message ? e.message : String(e)));
-        finish();
+  /* ---------- Date formatting regression tests ----------
+     Covers the Settings date-crash fix: formatDateTime/formatShort
+     must not throw on invalid input, and the production adapter's
+     signedInAt must normalize numeric Unix timestamps to ISO strings. */
+  function dateFormatRegressionTests() {
+    /* Synchronous: formatDateTime with valid ISO strings. */
+    ok('formatDateTime formats a valid ISO date-time string',
+       window.D.formatDateTime('2026-10-09T14:30:00Z') === '9 Octo, 14:30');
+    ok('formatDateTime formats a valid ISO date-only string',
+       window.D.formatDateTime('2026-10-09').indexOf('9 Oct') === 0);
+
+    /* Numeric Unix timestamps (seconds) must not throw. */
+    ok('formatDateTime returns empty string for a numeric Unix timestamp (does not throw)',
+       window.D.formatDateTime(1759999999) === '');
+    ok('formatDateTime formats the ISO string derived from a numeric Unix timestamp',
+       window.D.formatDateTime(new Date(1759999999 * 1000).toISOString()).length > 0);
+
+    /* Invalid / empty inputs must return '' and never throw. */
+    ok('formatDateTime returns empty string for null', window.D.formatDateTime(null) === '');
+    ok('formatDateTime returns empty string for undefined', window.D.formatDateTime(undefined) === '');
+    ok('formatDateTime returns empty string for empty string', window.D.formatDateTime('') === '');
+    ok('formatDateTime returns empty string for a non-date string', window.D.formatDateTime('not-a-date') === '');
+    ok('formatShort returns empty string for a non-date string', window.D.formatShort('not-a-date') === '');
+
+    /* Async: production adapter signedInAt normalization. */
+    var originalAdapter = window.Session.getAdapter();
+    var mock;
+    return Promise.resolve()
+      .then(function () {
+        mock = makeMockSupabase();
+        var uid = mock._seedUser('test@lifeos.test', 'Test Person');
+        mock._setCurrent(uid);
+        mock._setCreatedAt(null);
+        mock._setExpiresAt(1759999999);
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(adapter);
+        return adapter.restore();
+      })
+      .then(function () {
+        var u = window.Session.currentUser();
+        ok('signedInAt normalizes a numeric Unix timestamp to a valid ISO string',
+           typeof u.signedInAt === 'string' && !isNaN(new Date(u.signedInAt).getTime()));
+        ok('signedInAt matches new Date(1759999999*1000).toISOString()',
+           u.signedInAt === new Date(1759999999 * 1000).toISOString());
+        ok('formatDateTime formats the adapter signedInAt without throwing',
+           window.D.formatDateTime(u.signedInAt).length > 0);
+        return window.Session.signOut();
+      })
+      .then(function () {
+        window.Session.setAdapter(originalAdapter);
+        ok('demo adapter is restored after the date formatting regression tests',
+           window.Session.getAdapter() === originalAdapter);
       });
+  }
+
+  /* Production adapter contract tests (async). They run
+      after the synchronous suite and settle before the
+      summary is rendered. A rejection here is a real test
+      failure, so it is recorded — a silent rejection would
+      otherwise render "ALL PASS" with steps skipped. */
+  productionAuthTests()
+    .then(deploymentConfigWiringTests)
+    .then(dateFormatRegressionTests)
+    .then(finish, function (e) {
+      fails++;
+      lines.push('THROW async production adapter / config wiring tests :: ' +
+        (e && e.message ? e.message : String(e)));
+      finish();
+    });
   } catch (e) {
     lines.push('FATAL ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]);
     lines.push('ALL PASS (false)');

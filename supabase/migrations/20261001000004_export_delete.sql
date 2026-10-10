@@ -1,16 +1,16 @@
-# AI Life OS — data export and account deletion (§53, §59)
-#
-# Derived decision 38 in DATABASE-DESIGN-DECISIONS.md §8.
-#
-# Both functions are SECURITY DEFINER owned by postgres, so they are not subject to
+-- AI Life OS — data export and account deletion (§53, §59)
+--
+-- Derived decision 38 in DATABASE-DESIGN-DECISIONS.md §8.
+--
+-- Both functions are SECURITY DEFINER owned by postgres, so they are not subject to
 -- the caller's RLS. That is the point: §59 requires a user to export or delete
-# their *entire* account, which a per-table RLS policy cannot express because the
-# caller may hold no row-level grant at all (profiles has no DELETE grant).
-#
-# SECURITY INVOKER would therefore be wrong here. The trade-off is that
-# these functions bypass RLS by design, so both re-derive the target user from
+-- their *entire* account, which a per-table RLS policy cannot express because the
+-- caller may hold no row-level grant at all (profiles has no DELETE grant).
+--
+-- SECURITY INVOKER would therefore be wrong here. The trade-off is that
+-- these functions bypass RLS by design, so both re-derive the target user from
 -- auth.uid() and never accept a user id parameter. A caller can only ever act on
-# themselves.
+-- themselves.
 
 -- ---------------------------------------------------------------------------
 -- export_user_data — §53 "data export", §59 "how to delete information"

@@ -212,7 +212,7 @@
         name: name || nameFromEmail(email) || 'User',
         email: email,
         authState: 'supabase',
-        signedInAt: (s && (s.created_at || s.expires_at)) || user.created_at || null,
+        signedInAt: (s && (s.created_at || (typeof s.expires_at === 'number' && isFinite(s.expires_at) ? new Date(s.expires_at * 1000).toISOString() : s.expires_at))) || user.created_at || null,
         /* Existing profile columns. */
         timezone: (profile && profile.timezone) || undefined,
         subscription: (profile && profile.subscription) || undefined,

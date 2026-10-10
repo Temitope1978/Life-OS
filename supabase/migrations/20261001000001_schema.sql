@@ -1,18 +1,18 @@
-# AI Life OS — migrations
-#
-# Target: hosted PostgreSQL (Supabase Cloud). Apply with the Supabase CLI (`supabase db push`)
-# or by running each file in filename order against the connection string in
-# `SUPABASE_DB_URL` (environment variable only — never commit it).
-#
-# Source of truth: `LIFE OS folder/LIFE OS PROJECT.md` §49 (entities), §50 (relationships),
-# §53 (security). Every non-spec detail is a DERIVED decision recorded in
-# `DATABASE-DESIGN-DECISIONS.md`.
-#
-# Reconciliation issues:
-#   1 — `projects` table added — APPROVED 2026-10-03 (additive; §49 references it via task/document project_id)
-#   4 — `transcripts` table added — APPROVED 2026-10-03 (§50 chain node; §49 has only a storage reference)
-#   7 — `action_items.user_id` added — APPROVED 2026-10-03 (denormalised, trigger-maintained, for RLS)
-#   2 — workspace membership DEFERRED; workspaces are personal-only in the MVP
+-- AI Life OS — migrations
+--
+-- Target: hosted PostgreSQL (Supabase Cloud). Apply with the Supabase CLI (`supabase db push`)
+-- or by running each file in filename order against the connection string in
+-- `SUPABASE_DB_URL` (environment variable only — never commit it).
+--
+-- Source of truth: `LIFE OS folder/LIFE OS PROJECT.md` §49 (entities), §50 (relationships),
+-- §53 (security). Every non-spec detail is a DERIVED decision recorded in
+-- `DATABASE-DESIGN-DECISIONS.md`.
+--
+-- Reconciliation issues:
+--   1 — `projects` table added — APPROVED 2026-10-03 (additive; §49 references it via task/document project_id)
+--   4 — `transcripts` table added — APPROVED 2026-10-03 (§50 chain node; §49 has only a storage reference)
+--   7 — `action_items.user_id` added — APPROVED 2026-10-03 (denormalised, trigger-maintained, for RLS)
+--   2 — workspace membership DEFERRED; workspaces are personal-only in the MVP
 
 set search_path = public, extensions;
 
