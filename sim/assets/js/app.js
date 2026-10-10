@@ -40,6 +40,39 @@
     go(lastBaseRoute);
   }
 
+  /* ---------- Mobile secondary navigation ----------
+     On narrow screens the sidebar is hidden (see the app.css media
+     query), leaving secondary views with no way back. A small in-flow
+     Back + Dashboard bar is prepended for every authenticated,
+     non-modal view except the dashboard itself. It reuses App.go and
+     the browser hash history only — no new navigation system. */
+  function smartBack() {
+    if (window.history && window.history.length > 1) { window.history.back(); return; }
+    go('#/command');
+  }
+
+  function shouldShowMobileNav(path) {
+    if (isAuthShellRoute(path)) return false;
+    if (path === '/command') return false;
+    if (isModalRoute(path)) return false;
+    return true;
+  }
+
+  function mobileNav() {
+    return el('div.mobile-nav', [
+      el('button.btn.btn-secondary.btn-sm', {
+        type: 'button', text: '← Back',
+        'aria-label': 'Go back to the previous screen',
+        onclick: smartBack
+      }),
+      el('button.btn.btn-secondary.btn-sm', {
+        type: 'button', text: '◈ Dashboard',
+        'aria-label': 'Return to the main dashboard',
+        onclick: function () { go('#/command'); }
+      })
+    ]);
+  }
+
   /* ---------- Modals for detail routes ---------- */
   /* Task detail — full content via the reusable Details modal,
      with manual editing in the action form. */
@@ -276,6 +309,12 @@
     if (!window.Session.requireAuth(r.path)) {
       go('#/signin');
       return;
+    }
+
+    /* Mobile secondary navigation (see helpers above). Views append
+       their content after this bar, so it sits above page content. */
+    if (shouldShowMobileNav(r.path)) {
+      root.appendChild(mobileNav());
     }
 
     /* Route-aware application shell: the authentication /

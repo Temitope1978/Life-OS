@@ -473,3 +473,19 @@ button, input, select, textarea { font-family: inherit; }
 
 /* ---------- Toggle (inline) ---------- */
 label.toggle { cursor: pointer; }
+
+/* ---------- Mobile secondary navigation ----------
+   The sidebar is hidden on narrow screens (see the media query
+   above), so secondary views get a small in-flow Back + Dashboard
+   bar. Hidden on desktop; sticky on mobile without overlapping
+   content, forms, buttons or bottom areas (it is in normal flow). */
+.mobile-nav { display: none; }
+@media (max-width: 900px) {
+  .mobile-nav {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 14px;
+    position: sticky; top: 0; z-index: 20;
+    background: var(--bg); padding: 8px 0;
+  }
+  .mobile-nav .btn { min-height: 36px; }
+}
