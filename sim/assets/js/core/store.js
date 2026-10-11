@@ -138,6 +138,14 @@
     if (!client || !userId) { remoteLoaded = true; return Promise.resolve(); }
     return client.from('tasks').select('*').eq('user_id', userId)
       .then(function (r) {
+        /* A resolved response can still carry an error — treat it as a
+           failure, never as a valid empty list. */
+        if (r.error) {
+          remoteLoaded = true;
+          remoteError = (r.error.message || 'Could not load tasks');
+          notify();
+          return;
+        }
         remoteTasks = ((r && r.data) || []).map(fromDbTask);
         remoteLoaded = true; remoteError = null; notify();
       })
@@ -546,7 +554,12 @@
         if (!client || !userId) {
           return Promise.resolve({ ok: false, error: 'Not authenticated. Sign in to save tasks.' });
         }
-        return client.from('tasks').insert(toDbTask(t, userId)).select('*').single()
+        var dbTask = toDbTask(t, userId);
+        /* The schema defines task_id as uuid with a database-generated
+           default. Do NOT send the local t-… id — let Postgres assign
+           the UUID, then use the returned row as canonical. */
+        delete dbTask.task_id;
+        return client.from('tasks').insert(dbTask).select('*').single()
           .then(function (r) {
             if (r.error) return { ok: false, error: (r.error.message || 'Could not save the task.') };
             var saved = fromDbTask(r.data);

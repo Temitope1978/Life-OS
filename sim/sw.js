@@ -61,8 +61,9 @@ self.addEventListener('install', function (event) {
 });
 
 self.addEventListener('activate', function (event) {
-  /* Take control of all open clients immediately. */
-  self.clients.claim();
+  /* Take control of all open clients immediately, and wait for it so
+     the new worker is fully in control before the next load. */
+  event.waitUntil(self.clients.claim());
   event.waitUntil(
     caches.keys().then(function (keys) {
       return Promise.all(
