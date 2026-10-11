@@ -154,14 +154,17 @@
           console.warn('Service worker registration failed:', err);
         });
       });
-      /* When a new service worker takes control, reload so the page
-         runs the freshly fetched app shell (new JS/CSS). */
-      var refreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', function () {
-        if (refreshing) return;
-        refreshing = true;
-        window.location.reload();
-      });
+        /* Only reload on controllerchange when the page was already
+           controlled by a service worker. This distinguishes a genuine
+           worker update (reload to pick up new assets) from initial
+           installation (no reload), preventing the PWA from closing
+           or looping on first load. */
+        var hadController = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          if (hadController) {
+            window.location.reload();
+          }
+        });
     }
   </script>
 
