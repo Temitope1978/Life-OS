@@ -3,7 +3,7 @@
    API responses, auth endpoints, private data, credentials, or
    tokens. HTML is network-first to avoid stale versions. */
 
-const CACHE_NAME = 'lifeos-shell-v1';
+const CACHE_NAME = 'lifeos-shell-v3';
 
 const STATIC_ASSETS = [
   './',

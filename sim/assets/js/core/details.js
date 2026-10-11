@@ -289,11 +289,22 @@
     if (f.task) {
       actions.push(el('button.btn.btn-primary', {
         type: 'button', text: 'Add task', onclick: function () {
-          var t = window.Store.mut.createTask(f.task);
-          window.Store.mut.ignore('forgetting', f.id);
-          window.UI.toast('Task created: ' + t.title, 'ok');
-          ctx.swap();
-          window.Details.open({ kind: 'task', ref: t.id });
+          var result = window.Store.mut.createTask(f.task);
+          function handleTask(t) {
+            if (!t) return;
+            window.Store.mut.ignore('forgetting', f.id);
+            window.UI.toast('Task created: ' + t.title, 'ok');
+            ctx.swap();
+            window.Details.open({ kind: 'task', ref: t.id });
+          }
+          if (result && typeof result.then === 'function') {
+            result.then(function (r) {
+              if (!r.ok) { window.UI.toast(r.error, 'err'); return; }
+              handleTask(r.task);
+            });
+          } else {
+            handleTask(result);
+          }
         }
       }));
     }

@@ -62,6 +62,95 @@
     catch (e) { /* quota / private mode — simulation continues without persistence */ }
   }
 
+  /* ---------- Remote task persistence (live mode) ----------
+     In live mode, user-created tasks are written to and read from the
+     public.tasks table (RLS-enforced). Demo mode keeps the existing
+     localStorage behaviour unchanged. The remote list is loaded once
+     after the auth session is restored; tasks() stays synchronous by
+     merging seed + remote + local. */
+  var remoteTasks = [];
+  var remoteLoaded = false;
+  var remoteError = null;
+
+  function isLiveMode() {
+    var m = (window.Config && (window.Config.get('LIFEOS_MODE') || window.Config.get('LIFEOS_ENV'))) || '';
+    m = String(m || 'demo').toLowerCase();
+    return m === 'live' || m === 'production';
+  }
+  function currentUserId() {
+    var id = (window.Identity && window.Identity.current) ? window.Identity.current().userId : null;
+    if (id) return id;
+    var u = (window.Session && window.Session.currentUser) ? window.Session.currentUser() : null;
+    return (u && u.userId) || null;
+  }
+  function supabaseClient() {
+    return (window.SupabaseAuth && typeof window.SupabaseAuth.client === 'function')
+      ? window.SupabaseAuth.client() : null;
+  }
+  /* Map the store's task shape to the public.tasks schema. */
+  function toDbTask(t, userId) {
+    var status = t.status || 'open';
+    if (status === 'Inbox' || status === 'Planned') status = 'open';
+    var priority = 50;
+    if (t.priority === 'high') priority = 80;
+    else if (t.priority === 'low') priority = 20;
+    else if (typeof t.priority === 'number') priority = t.priority;
+    return {
+      task_id: t.id,
+      user_id: userId,
+      title: t.title,
+      description: t.description || null,
+      status: status,
+      priority: priority,
+      due_date: t.dueDate || null,
+      source: t.source || 'manual',
+      project_id: t.project || null,
+      contact_id: t.contactId || null,
+      dependency_id: t.blockedBy || null,
+      created_at: t.created ? (new Date(t.created + 'T00:00:00Z').toISOString()) : null
+    };
+  }
+  /* Map a public.tasks row back to the store's task shape. */
+  function fromDbTask(row) {
+    var priority = 'medium';
+    if (row.priority >= 70) priority = 'high';
+    else if (row.priority <= 30) priority = 'low';
+    return {
+      id: row.task_id,
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      priority: priority,
+      dueDate: row.due_date,
+      dueTime: null,
+      source: row.source,
+      contactId: row.contact_id,
+      project: row.project_id,
+      blockedBy: row.dependency_id,
+      created: row.created_at ? row.created_at.slice(0, 10) : null,
+      userCreated: true
+    };
+  }
+  function loadRemoteTasks() {
+    if (!isLiveMode()) { remoteLoaded = true; return Promise.resolve(); }
+    var client = supabaseClient();
+    var userId = currentUserId();
+    if (!client || !userId) { remoteLoaded = true; return Promise.resolve(); }
+    return client.from('tasks').select('*').eq('user_id', userId)
+      .then(function (r) {
+        remoteTasks = ((r && r.data) || []).map(fromDbTask);
+        remoteLoaded = true; remoteError = null; notify();
+      })
+      .catch(function (e) {
+        remoteLoaded = true;
+        remoteError = (e && e.message) || 'Could not load tasks';
+        notify();
+      });
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('supabase-auth-ready', function () { loadRemoteTasks(); });
+  }
+
   /* ---------- Read helpers ---------- */
   function seed() { return window.SEED; }
 
@@ -95,6 +184,7 @@
       if (ov.project !== undefined) copy.project = ov.project;
       out.push(copy);
     });
+    remoteTasks.forEach(function (t) { out.push(t); });
     state.mutable.newTasks.forEach(function (t) { out.push(t); });
     return out;
   }
@@ -447,6 +537,28 @@
         created: window.D.today(),
         userCreated: true
       };
+      /* Live mode: persist to Supabase. Show success ONLY after the
+         database confirms the write; surface a user-safe error on
+         failure; never silently fall back to localStorage. */
+      if (isLiveMode()) {
+        var client = supabaseClient();
+        var userId = currentUserId();
+        if (!client || !userId) {
+          return Promise.resolve({ ok: false, error: 'Not authenticated. Sign in to save tasks.' });
+        }
+        return client.from('tasks').insert(toDbTask(t, userId)).select('*').single()
+          .then(function (r) {
+            if (r.error) return { ok: false, error: (r.error.message || 'Could not save the task.') };
+            var saved = fromDbTask(r.data);
+            remoteTasks.unshift(saved);
+            commit();
+            return { ok: true, task: saved };
+          })
+          .catch(function (e) {
+            return { ok: false, error: ((e && e.message) || 'Could not save the task.') };
+          });
+      }
+      /* Demo mode: existing localStorage behaviour, synchronous. */
       state.mutable.newTasks.unshift(t);
       commit();
       return t;

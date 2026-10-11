@@ -366,6 +366,7 @@
 
     return {
       id: 'supabase',
+      client: function () { return client; },
       session: session,
       isAuthenticated: isAuthenticated,
       currentUser: currentUser,
@@ -436,6 +437,9 @@
       });
       return adapter.restore().then(function () {
         window.Session.setAdapter(adapter);
+        /* Notify the store so it can load remote-owned data for the
+           now-authenticated user. The store listens for this event. */
+        try { window.dispatchEvent(new CustomEvent('supabase-auth-ready')); } catch (e) {}
         return { mode: 'production', status: 'ready', adapter: adapter };
       });
     });
@@ -449,6 +453,13 @@
     bootstrap: bootstrap,
     SupabaseAuthAdapter: { create: create },
     MisconfiguredAdapter: MisconfiguredAdapter,
-    loadScript: loadScript
+    loadScript: loadScript,
+    /* The authenticated Supabase client, or null in demo/misconfigured
+       mode. Used by the store for remote-owned data. Never exposes
+       tokens or secrets — the client object holds no secret values. */
+    client: function () {
+      var a = window.Session.getAdapter();
+      return (a && typeof a.client === 'function') ? a.client() : null;
+    }
   };
 })();
