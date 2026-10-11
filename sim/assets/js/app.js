@@ -401,6 +401,39 @@
         if (bar) bar.focus();
       }
     });
+
+    /* ---------- Mobile navigation drawer ---------- */
+    var menuBtn = document.getElementById('menu-btn');
+    var drawer = document.getElementById('drawer');
+    var overlay = document.getElementById('drawer-overlay');
+    var drawerClose = document.getElementById('drawer-close');
+    function openDrawer() {
+      if (!drawer) return;
+      drawer.classList.add('open');
+      if (overlay) overlay.classList.add('open');
+      drawer.setAttribute('aria-hidden', 'false');
+      if (menuBtn) menuBtn.setAttribute('aria-expanded', 'true');
+      /* Push a state so Android/browser Back closes the drawer. */
+      try { history.pushState({ lifeosDrawer: true }, '', location.href); } catch (e) {}
+    }
+    function closeDrawer() {
+      if (!drawer) return;
+      drawer.classList.remove('open');
+      if (overlay) overlay.classList.remove('open');
+      drawer.setAttribute('aria-hidden', 'true');
+      if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+    }
+    if (menuBtn) menuBtn.addEventListener('click', function () {
+      if (drawer && drawer.classList.contains('open')) closeDrawer(); else openDrawer();
+    });
+    if (drawerClose) drawerClose.addEventListener('click', closeDrawer);
+    if (overlay) overlay.addEventListener('click', closeDrawer);
+    /* Close the drawer whenever the route changes. */
+    window.addEventListener('hashchange', closeDrawer);
+    /* Android / browser Back closes an open drawer first. */
+    window.addEventListener('popstate', function () {
+      if (drawer && drawer.classList.contains('open')) closeDrawer();
+    }, false);
   }
 
   /* ---------- Sign Out ----------

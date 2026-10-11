@@ -39,6 +39,8 @@
     <a href="#/control"  data-nav="control"><span class="ic">⚙</span> Control Center</a>
     <a href="#/settings" data-nav="settings"><span class="ic">☰</span> Settings</a>
 
+    <button class="sidebar-logout" type="button" onclick="window.App.signOut()">Sign Out</button>
+
     <div class="sim-note">
       <strong style="color:#cfc3e6">Simulation</strong><br>
       Seeded data. No live accounts, no real AI calls. Approvals persist in your browser.
@@ -47,10 +49,37 @@
 
   <!-- ============ Main ============ -->
   <main class="main">
+    <button class="menu-btn" id="menu-btn" type="button" aria-label="Open navigation">☰</button>
     <div id="view"></div>
   </main>
 
 </div>
+
+<!-- ============ Mobile navigation drawer ============ -->
+<div class="drawer-overlay" id="drawer-overlay"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-head">
+    <span class="brand-text">LIFE OS</span>
+    <button class="drawer-close" id="drawer-close" type="button" aria-label="Close navigation">&times;</button>
+  </div>
+  <nav class="drawer-nav">
+    <div class="navlabel">Daily</div>
+    <a href="#/command" data-nav="command"><span class="ic">◈</span> Command Center</a>
+    <a href="#/day" data-nav="day"><span class="ic">☀</span> My Day</a>
+    <a href="#/mail" data-nav="mail"><span class="ic">✉</span> Inbox</a>
+    <a href="#/calendar" data-nav="calendar"><span class="ic">▦</span> Calendar</a>
+    <div class="navlabel">Intelligence</div>
+    <a href="#/meetings" data-nav="meetings"><span class="ic">◉</span> Meetings</a>
+    <a href="#/forget" data-nav="forget"><span class="ic">?</span> What Am I Forgetting?</a>
+    <a href="#/search" data-nav="search"><span class="ic">⌕</span> Search</a>
+    <div class="navlabel">Control</div>
+    <a href="#/commitments" data-nav="commitments"><span class="ic">⚑</span> Commitments</a>
+    <a href="#/waiting" data-nav="waiting"><span class="ic">◷</span> Waiting For</a>
+    <a href="#/control" data-nav="control"><span class="ic">⚙</span> Control Center</a>
+    <a href="#/settings" data-nav="settings"><span class="ic">☰</span> Settings</a>
+    <button class="drawer-logout" type="button" onclick="window.App.signOut()">Sign Out</button>
+  </nav>
+</aside>
 
 <div class="toast-wrap" id="toasts"></div>
 <div id="modal-root"></div>
@@ -118,15 +147,23 @@
 <script src="assets/js/ui/views/auth.js"></script>
 <script src="assets/js/app.js"></script>
 
-<script>
-  if ('serviceWorker' in navigator && !window.Capacitor) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('./sw.js').catch(function (err) {
-        console.warn('Service worker registration failed:', err);
+  <script>
+    if ('serviceWorker' in navigator && !window.Capacitor) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function (err) {
+          console.warn('Service worker registration failed:', err);
+        });
       });
-    });
-  }
-</script>
+      /* When a new service worker takes control, reload so the page
+         runs the freshly fetched app shell (new JS/CSS). */
+      var refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    }
+  </script>
 
 </body>
 </html>

@@ -3,7 +3,7 @@
    API responses, auth endpoints, private data, credentials, or
    tokens. HTML is network-first to avoid stale versions. */
 
-const CACHE_NAME = 'lifeos-shell-v3';
+const CACHE_NAME = 'lifeos-shell-v4';
 
 const STATIC_ASSETS = [
   './',
@@ -48,6 +48,9 @@ const STATIC_ASSETS = [
 ];
 
 self.addEventListener('install', function (event) {
+  /* Activate immediately so the next load fetches the new app shell
+     instead of being served stale JS by the previous worker. */
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then(function (cache) {
       return cache.addAll(STATIC_ASSETS).catch(function () {
@@ -58,6 +61,8 @@ self.addEventListener('install', function (event) {
 });
 
 self.addEventListener('activate', function (event) {
+  /* Take control of all open clients immediately. */
+  self.clients.claim();
   event.waitUntil(
     caches.keys().then(function (keys) {
       return Promise.all(
