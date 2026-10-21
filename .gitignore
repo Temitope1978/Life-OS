@@ -18,3 +18,6 @@ supabase/.temp/
 # the SUPABASE_URL / SUPABASE_ANON_KEY repository secrets. The tracked
 # template is sim/assets/js/env.example.js.
 sim/assets/js/env.js
+
+# Local Netlify folder
+.netlify
