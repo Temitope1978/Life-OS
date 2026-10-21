@@ -36,6 +36,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/core/session.js"></script>
 <script src="assets/js/core/identity.js"></script>
 <script src="assets/js/core/supabase-auth.js"></script>
+<script src="assets/js/core/response-templates.js"></script>
 <script src="assets/js/engines/mail.js"></script>
 <script src="assets/js/engines/commitment.js"></script>
 <script src="assets/js/engines/priority.js"></script>
@@ -44,6 +45,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 <script src="assets/js/engines/forgetting.js"></script>
 <script src="assets/js/engines/search.js"></script>
 <script src="assets/js/engines/briefing.js"></script>
+<script src="assets/js/engines/notetaker.js"></script>
 <script src="assets/js/ui/dom.js"></script>
     <script src="assets/js/ui/components.js"></script>
     <script src="assets/js/core/details.js"></script>
@@ -109,12 +111,15 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     var currentUserId = null;
     var seq = 0;
     var queried = {};   /* every table the adapter queries */
+    var lastSignUpData = null; /* metadata object the adapter sent on sign-up */
+    var taskRows = {};  /* userId -> public.tasks rows owned by that user */
+    var inserted = [];  /* every row the app inserted, with its table */
 
     function userRecord(id, email, name) {
       return {
         id: id, email: email, created_at: '2026-01-01T00:00:00Z',
-        user_metadata: { full_name: name },
-        raw_user_meta_data: { full_name: name }
+        user_metadata: { full_name: name, name: name },
+        raw_user_meta_data: { full_name: name, name: name }
       };
     }
 
@@ -136,13 +141,15 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
 
     var client = {
       /* Test-only seeding helpers (the adapter ignores them). */
-      _seedUser: function (email, profileName) {
+      _seedUser: function (email, profileName, metaName) {
         var id = 'mock-user-' + (++seq);
         /* user_metadata.full_name is deliberately a DIFFERENT value
            from the profile.name column, so the tests can prove the
            adapter reads the existing profile.name column and does not
-           fall back to the auth metadata. */
-        users[id] = userRecord(id, email, 'Metadata ' + profileName);
+           fall back to the auth metadata. metaName overrides the
+           metadata value (or nulls it) for first-name rule tests. */
+        var meta = (metaName === undefined) ? ('Metadata ' + profileName) : metaName;
+        users[id] = userRecord(id, email, meta);
         profiles[id] = profileRow(id, profileName, email, 'Europe/Oslo', 'free');
         sessions[id] = {
           user: users[id], expires_at: '2026-12-31T00:00:00Z',
@@ -150,8 +157,13 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
         };
         return id;
       },
+      /* Seed public.tasks rows OWNED by one user (RLS-shaped: each
+         row carries its owner's user_id, as the app must stamp it). */
+      _seedTasks: function (userId, rows) { taskRows[userId] = rows; },
+      _inserted: function () { return inserted; },
       _setCurrent: function (id) { currentUserId = id; },
       _queried: function () { return Object.keys(queried); },
+      _lastSignUpData: function () { return lastSignUpData; },
       _setExpiresAt: function (val) { if (currentUserId && sessions[currentUserId]) sessions[currentUserId].expires_at = val; },
       _setCreatedAt: function (val) { if (currentUserId && sessions[currentUserId]) sessions[currentUserId].created_at = val; },
 
@@ -176,7 +188,13 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
           var exists = Object.keys(users).some(function (k) { return users[k].email === params.email; });
           if (exists) return Promise.resolve({ data: {}, error: { message: 'User already registered' } });
           var id = 'mock-user-' + (++seq);
-          var name = (params.options && params.options.data && params.options.data.full_name) || 'New User';
+          var data = (params.options && params.options.data) || {};
+          lastSignUpData = data;
+          /* Mirror the EXISTING handle_new_user() trigger (migration
+             20261001000003_rls.sql): it reads raw_user_meta_data ->>
+             'name' — NOT 'full_name'. A mock that read full_name
+             would hide a metadata-key mismatch with production. */
+          var name = data.name || data.full_name || (params.email || '').split('@')[0] || 'New User';
           users[id] = userRecord(id, params.email, name);
           /* Mimic the EXISTING handle_new_user() trigger (migration
              20261001000003_rls.sql): it creates ONLY a profiles row,
@@ -203,12 +221,33 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
           select: function () {
             return {
               eq: function (col, val) {
-                var rows = (table === 'profiles' && profiles[val]) ? [profiles[val]] : [];
+                /* profiles resolve the single own row; tasks resolve
+                   only the rows owned by the requested user (RLS
+                   behaviour); anything else is empty. */
+                var rows = (table === 'profiles' && profiles[val]) ? [profiles[val]]
+                  : (table === 'tasks' ? (taskRows[val] || []) : []);
                 return {
                   then: function (onFulfilled, onRejected) {
                     return Promise.resolve({ data: rows }).then(onFulfilled, onRejected);
                   },
                   single: function () { return Promise.resolve({ data: rows[0] || null }); }
+                };
+              }
+            };
+          },
+          /* Records the insert (table + row) and echoes the row back
+             as the created record, like PostgREST .select().single().
+             Lets the tests prove AI/user task creation stamps the
+             current user's id. */
+          insert: function (row) {
+            inserted.push({ table: table, row: row });
+            if (table === 'tasks' && row.user_id) {
+              taskRows[row.user_id] = (taskRows[row.user_id] || []).concat([row]);
+            }
+            return {
+              select: function () {
+                return {
+                  single: function () { return Promise.resolve({ data: row, error: null }); }
                 };
               }
             };
@@ -310,6 +349,25 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
         return window.Session.signOut();
       })
       .then(function () {
+        /* Sign-in reload pin (faculty demo persistence): signing in
+           with no page reload tells the store to load the user's
+           remote tasks — otherwise lists stay empty after sign-in. */
+        mock = makeMockSupabase();
+        mock._seedUser('test@lifeos.test', 'Test Person');
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(adapter);
+        var fired = false;
+        function h() { fired = true; }
+        window.addEventListener('supabase-auth-ready', h);
+        return adapter.signIn({ email: 'test@lifeos.test', password: 'correct-password' })
+          .then(function (r2) {
+            window.removeEventListener('supabase-auth-ready', h);
+            ok('sign-in notifies the store to reload remote-owned tasks',
+               r2.ok === true && fired === true);
+            return window.Session.signOut();
+          });
+      })
+      .then(function () {
         /* Wrong password on a fresh adapter must fail closed. */
         mock = makeMockSupabase();
         mock._seedUser('test@lifeos.test', 'Test Person');
@@ -338,6 +396,51 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
            window.Session.currentUser().subscription === 'free' &&
            window.Session.currentUser().autonomy === undefined &&
            window.Session.currentUser().permissions === undefined);
+        /* Regression pin: the hosted handle_new_user() trigger reads
+           raw_user_meta_data ->> 'name'. Sending only 'full_name'
+           used to leave new profiles named after the email prefix. */
+        ok('sign-up metadata carries the name key the existing signup trigger reads',
+           !!(mock._lastSignUpData() && mock._lastSignUpData().name === 'New Person'));
+        /* Regression pin: a confirmation-mail delivery failure (SMTP /
+           mailer misconfiguration) must be actionable, never the
+           generic request error — and must not tell the user to check
+           an inbox the mail never reached. */
+        ok('confirmation-send failure maps to an actionable message, not the generic error',
+           window.SupabaseAuth.authErrorMessage({ message: 'Error sending confirmation email' }) ===
+             'We could not send the confirmation email. Please check the address and try again, or contact support.');
+        ok('server-side password policy maps to a password message without hijacking sign-in errors',
+           window.SupabaseAuth.authErrorMessage({ message: 'Password should be at least 8 characters.' }) ===
+             'Please choose a stronger password (at least 8 characters).');
+        /* First-name repair rule: a profile that merely repeats the
+           email local part (pre-metadata-fix accounts) yields to real
+           signup metadata — the greeting must never show "temitope123". */
+        mock = makeMockSupabase();
+        var repairUid = mock._seedUser('temitope123@example.com', 'temitope123', 'Temitope Real');
+        mock._setCurrent(repairUid);
+        var repairAdapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(repairAdapter);
+        return repairAdapter.restore();
+      })
+      .then(function () {
+        ok('stored email-prefix profile yields to real signup metadata',
+           window.Session.currentUser() && window.Session.currentUser().name === 'Temitope Real');
+        /* No saved name anywhere (nameless profile, nameless
+           metadata): the name stays null so the greeting falls back
+           to neutral instead of inventing one from the email. */
+        mock = makeMockSupabase();
+        var nullUid = mock._seedUser('noname@example.com', null, null);
+        mock._setCurrent(nullUid);
+        var nullAdapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(nullAdapter);
+        return nullAdapter.restore();
+      })
+      .then(function () {
+        var u = window.Session.currentUser();
+        ok('missing profile and metadata names stay missing (never email-derived)',
+           !!u && u.name === null && u.email === 'noname@example.com');
+        ok('nameless account has a null first name for the neutral greeting',
+           window.Identity.firstName() === null);
+        return window.Session.signOut();
       })
       .then(function () {
         /* Restore the demo adapter + default config so the
@@ -602,12 +705,88 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     ok('signed-in #/command opens the existing Command Center (greeting + priority cards)',
        (function () {
          var t = document.getElementById('view').textContent;
-         return t.indexOf('Good ') !== -1 && t.indexOf('Priority items') !== -1 &&
+         /* Demo sign-in collects no name, so the greeting is
+            neutral by design (never an email-derived guess). */
+         return (t.indexOf('Good ') !== -1 || t.indexOf('Welcome back') !== -1) &&
+                t.indexOf('Priority items') !== -1 &&
                 window.DemoAuth.isSignedIn() === true;
        })());
     ok('Command Center remains functional after sign-in',
        window.EnginesBriefing.build().stats.meetings === 3 &&
        window.EnginesPriority.priorityItems().length === 4);
+    /* Sidebar correction pin: navState highlights the mobile
+       drawer together with the desktop sidebar on EVERY route
+       (waiting shares the commitments item). The selftest page has
+       no shell markup, so a scratch copy of both navs (same
+       selectors, same data-nav) proves the real navState toggles
+       both, exclusively. */
+    var navPin = tryRun('every route highlights in sidebar and drawer', function () {
+      var host = document.createElement('div');
+      var links = ['command', 'day', 'mail', 'calendar', 'meetings',
+        'forget', 'search', 'commitments', 'waiting', 'control', 'settings'];
+      function navHtml(cls) {
+        return '<nav class="' + cls + '">' + links.map(function (n) {
+          return '<a href="#/' + n + '" data-nav="' + n + '">X</a>';
+        }).join('') + '</nav>';
+      }
+      host.innerHTML = navHtml('sidebar') + navHtml('drawer-nav');
+      document.body.appendChild(host);
+      var expect = { command: 'command', day: 'day', mail: 'mail',
+        calendar: 'calendar', meetings: 'meetings', forget: 'forget',
+        search: 'search', commitments: 'commitments', waiting: 'commitments',
+        control: 'control', settings: 'settings' };
+      var bad = [];
+      links.forEach(function (route) {
+        window.location.hash = '#/' + route;
+        window.App.render();
+        var want = expect[route];
+        var side = host.querySelectorAll('.sidebar a.active');
+        var drawer = host.querySelectorAll('.drawer-nav a.active');
+        var okSide = side.length === 1 && side[0].getAttribute('data-nav') === want;
+        var okDrawer = drawer.length === 1 && drawer[0].getAttribute('data-nav') === want;
+        if (!okSide || !okDrawer) bad.push(route);
+      });
+      window.location.hash = '#/command';
+      window.App.render();
+      document.body.removeChild(host);
+      return bad.length ? 'BAD:' + bad.join(',') : 'all 11 routes ok';
+    });
+    ok('every route highlights exclusively in sidebar and drawer',
+       navPin === 'all 11 routes ok');
+    /* Restart survival (faculty persistence): a demo task written to
+       localStorage is still there after a simulated restart
+       (Store.init re-read). The persisted layer is snapshotted and
+       restored so the suite ends exactly as it started. */
+    var LS_KEY = 'lifeos.sim.v1';
+    var lsSnap = null;
+    var restartPin = tryRun('demo task survives a store reload', function () {
+      try { lsSnap = window.localStorage.getItem(LS_KEY); } catch (e) { lsSnap = null; }
+      var t = window.Store.mut.createTask({ title: 'Restart survival probe' });
+      window.Store.init();
+      return window.Store.tasks().some(function (x) { return x.id === t.id; }) ? 'persisted' : 'FAILED';
+    });
+    ok('user-created demo task survives restart (localStorage round-trip)',
+       restartPin === 'persisted');
+    var restartCleanup = tryRun('restart probe cleaned up', function () {
+      try {
+        if (lsSnap === null) window.localStorage.removeItem(LS_KEY);
+        else window.localStorage.setItem(LS_KEY, lsSnap);
+      } catch (e) {}
+      window.Store.init();
+      return window.Store.tasks().some(function (x) { return x.title === 'Restart survival probe'; }) ? 'LEAKED' : 'restored';
+    });
+    ok('restart probe leaves no trace for later tests',
+       restartCleanup === 'restored');
+    /* Logo pin: the authentication screen renders the approved
+       Life OS logo asset (same file the APK packages). */
+    var logoSrc = tryRun('auth screen shows the approved logo', function () {
+      var host = document.createElement('div');
+      window.ViewAuth.signIn(host);
+      var img = host.querySelector('img.auth-logo');
+      return (img && img.getAttribute('src')) || 'NO-LOGO';
+    });
+    ok('authentication screen uses the approved Life OS logo',
+       logoSrc === 'assets/images/life-os-logo.png');
     ok('Action Authorization Layer is unchanged by the demo session',
        window.Actions.decide({ type: 'send_external_email', recipient: 'x@y.com' }, window.Store.user()).mode === 'approve');
     ok('providers remain in demo mode (provider/OAuth architecture unchanged)',
@@ -678,6 +857,17 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       return signOutCleared ? 'cleared then restored' : 'FAILED';
     });
     ok('Session.signOut ends authentication in both Session and DemoAuth', signOutCleared);
+    /* First-name pin (faculty demo): the greeting uses the account's
+       own first name in every session state — never another identity.
+       State-independent: consistent with displayName whether signed
+       in (demo session here) or out. */
+    ok('Identity.firstName is the first word of the account display name (null when signed out)',
+       (function () {
+         var d = (window.Identity && window.Identity.displayName) ? window.Identity.displayName() : null;
+         var f = (window.Identity && window.Identity.firstName) ? window.Identity.firstName() : null;
+         if (d) return f === String(d).split(/\s+/).filter(Boolean)[0];
+         return f === null;
+       })());
     ok('Identity.current returns the expected demo identity',
        (function () {
          var id = window.Identity.current();
@@ -2016,9 +2206,13 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
        (function () {
          var txt = document.getElementById('modal-root').textContent;
          var e = window.Store.email('m01');
-         var u = window.Store.user();
+         /* The recipient is the signed-in account (the demo session
+            at this point in the suite), never the demo seed profile:
+            the popup shares the mail view's identity rule. */
+         var id = (window.Identity && window.Identity.current) ? window.Identity.current() : null;
+         var recipient = (id && id.userId && id.email) ? id.email : window.Store.user().email;
          return txt.indexOf(e.subject) !== -1 &&
-                txt.indexOf('From') !== -1 && txt.indexOf(u.email) !== -1 &&
+                txt.indexOf('From') !== -1 && txt.indexOf(recipient) !== -1 &&
                 txt.indexOf('finance team') !== -1 &&
                 txt.indexOf(window.D.formatDateTime(e.received)) !== -1;
        })());
@@ -2415,6 +2609,383 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       });
   }
 
+  /* ---------- Fresh workspace + two-account isolation (faculty Round 2) ----------
+     Mock Supabase projects only — no network. Proves a fresh live
+     account sees no sample content in any domain, explicit creation
+     stamps the current user, two accounts cannot see each other's
+     rows, and greetings follow the saved first name (or neutral).
+     Restores the demo adapter, demo config, a clean store and
+     #/command afterwards. */
+  function freshWorkspaceIsolationTests() {
+    var originalAdapter = window.Session.getAdapter();
+    var originalHash = window.location.hash;
+    /* Demo-mode task count on entry (includes rows earlier suite
+       steps created and kept, e.g. the action-form tests): the
+       block must add no local rows of its own. */
+    var entryTaskCount = window.Store.tasks().length;
+    var mockA = null, mockB = null, uidA = null, uidB = null;
+    function liveCfg() {
+      window.Config.load({
+        LIFEOS_MODE: 'live',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_ANON_KEY: 'anon-key'
+      });
+    }
+    function waitFor(cond) {
+      var tries = 0;
+      return new Promise(function (resolve, reject) {
+        (function poll() {
+          var v = null;
+          try { v = cond(); } catch (e) { v = null; }
+          if (v) return resolve(v);
+          if (++tries > 120) return reject(new Error('timed out waiting for store reload'));
+          setTimeout(poll, 10);
+        })();
+      });
+    }
+    function h1() {
+      window.location.hash = '#/command';
+      window.App.render();
+      var h = document.querySelector('#view h1');
+      return h ? h.textContent : '';
+    }
+    function cleanup() {
+      window.Session.setAdapter(originalAdapter);
+      window.Config.load();
+      if (window.Store.clearRemoteState) window.Store.clearRemoteState();
+      window.location.hash = originalHash || '#/command';
+    }
+
+    return Promise.resolve()
+      .then(function () {
+        liveCfg();
+        mockA = makeMockSupabase();
+        uidA = mockA._seedUser('ada@example.com', 'Ada Lovelace');
+        mockA._setCurrent(uidA);
+        var adapterA = window.SupabaseAuth.SupabaseAuthAdapter.create(mockA);
+        window.Session.setAdapter(adapterA);
+        return adapterA.restore();
+      })
+      .then(function () {
+        /* 1. Fresh account: every user-data domain reads empty — no
+           sample tasks, records, contacts or reminders. */
+        ok('fresh live account starts with a clean workspace in every domain',
+           window.Store.tasks().length === 0 &&
+           window.Store.commitments().length === 0 &&
+           window.Store.followUps().length === 0 &&
+           window.Store.meetings().length === 0 &&
+           window.Store.events().length === 0 &&
+           window.Store.emails().length === 0 &&
+           window.Store.documents().length === 0 &&
+           window.Store.contacts().length === 0 &&
+           window.EnginesTasks.remindersDue().length === 0);
+        /* 6a. Acceptance: first name "Ada" drives the greeting —
+           full name must not leak into it. */
+        var g = h1();
+        ok('greeting uses the saved first name, not the full name',
+           g.indexOf('Ada') !== -1 && g.indexOf('Ada Lovelace') === -1);
+        /* 3. Explicit AI/manual creation stamps the current user. */
+        return window.Store.mut.createTask({ title: 'Compute engine notes', status: 'Inbox' });
+      })
+      .then(function (r) {
+        ok('explicit task creation succeeds and stamps the current user id',
+           !!r && r.ok === true && mockA._inserted().length === 1 &&
+           mockA._inserted()[0].table === 'tasks' &&
+           mockA._inserted()[0].row.user_id === uidA);
+        ok('the created task appears in the same account workspace',
+           window.Store.tasks().some(function (x) { return x.title === 'Compute engine notes'; }));
+        /* 4. Second account with its own rows: switch + reload. */
+        mockB = makeMockSupabase();
+        uidB = mockB._seedUser('grace@example.com', 'Grace Hopper');
+        mockB._seedTasks(uidB, [{
+          task_id: 'b-task-1', user_id: uidB, title: 'Cobol draft',
+          description: null, status: 'open', priority: 50, due_date: null,
+          source: 'manual', project_id: null, contact_id: null,
+          dependency_id: null, created_at: null
+        }]);
+        mockB._setCurrent(uidB);
+        var adapterB = window.SupabaseAuth.SupabaseAuthAdapter.create(mockB);
+        window.Session.setAdapter(adapterB);
+        return adapterB.restore().then(function () {
+          window.dispatchEvent(new CustomEvent('supabase-auth-ready'));
+          return waitFor(function () {
+            var all = window.Store.tasks();
+            if (all.length !== 1 || all[0].title !== 'Cobol draft') return null;
+            return all;
+          });
+        });
+      })
+      .then(function (all) {
+        ok('account switch drops previous rows: only the new account rows load',
+           all.length === 1 && all[0].title === 'Cobol draft');
+        /* 6b. Acceptance: stored "Temitope" greets exactly so. */
+        var mockT = makeMockSupabase();
+        var uidT = mockT._seedUser('temitope@example.com', 'Temitope Adeyemi');
+        mockT._setCurrent(uidT);
+        var adapterT = window.SupabaseAuth.SupabaseAuthAdapter.create(mockT);
+        window.Session.setAdapter(adapterT);
+        return adapterT.restore();
+      })
+      .then(function () {
+        var g = h1();
+        ok('stored first name "Temitope" greets exactly so (never the email prefix)',
+           g.indexOf('Temitope') !== -1 && g.indexOf('Adeyemi') === -1 && g.indexOf('temitope@') === -1);
+        /* 7. Acceptance: no saved name → neutral "Welcome back". */
+        var mockN = makeMockSupabase();
+        var uidN = mockN._seedUser('noname@example.com', null, null);
+        mockN._setCurrent(uidN);
+        var adapterN = window.SupabaseAuth.SupabaseAuthAdapter.create(mockN);
+        window.Session.setAdapter(adapterN);
+        return adapterN.restore();
+      })
+      .then(function () {
+        ok('nameless account greets neutrally ("Welcome back")',
+           h1() === 'Welcome back');
+        /* Still live here: dropping the remote cache must leave zero
+           rows (sign-out clearing really clears). */
+        window.Store.clearRemoteState();
+        ok('sign-out clearing drops all cached remote rows',
+           window.Store.tasks().length === 0);
+        cleanup();
+        ok('demo adapter is restored after isolation tests',
+           window.Session.getAdapter() === originalAdapter);
+        ok('demo config is restored after isolation tests',
+           window.SupabaseAuth.isProductionMode() === false);
+        ok('isolation tests leak no local tasks of their own',
+           window.Store.tasks().length === entryTaskCount,
+           'got=' + window.Store.tasks().length + ' entry=' + entryTaskCount);
+      })
+      .catch(function (e) {
+        cleanup();
+        throw e;
+      });
+  }
+
+  /* ---------- Core feature repair tests (Stage: multi-user security,
+     personalization, notetaker, templates) ----------
+     Mock Supabase only — no network, no real accounts. Covers:
+     live-mode isolation between two users, per-user browser scope,
+     the live-mode date rule, the notetaker pipeline (including the
+     refusal to fabricate a transcript), response templates, and the
+     fail-closed path for a broken deployment configuration. */
+  function coreFeatureRepairTests() {
+    var originalAdapter = window.Session.getAdapter();
+    var originalHash = window.location.hash;
+    var mockA = null, mockB = null, uidA = null, uidB = null;
+
+    function liveCfg() {
+      window.Config.load({
+        LIFEOS_MODE: 'live',
+        SUPABASE_URL: 'https://example.supabase.co',
+        SUPABASE_ANON_KEY: 'anon-key'
+      });
+    }
+    function demoCfg() { window.Config.load(); }
+    function waitFor(cond) {
+      var tries = 0;
+      return new Promise(function (resolve, reject) {
+        (function poll() {
+          var v = null;
+          try { v = cond(); } catch (e) { v = null; }
+          if (v) return resolve(v);
+          if (++tries > 120) return reject(new Error('timed out waiting for store reload'));
+          setTimeout(poll, 10);
+        })();
+      });
+    }
+    function useAdapter(mock) {
+      var a = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+      window.Session.setAdapter(a);
+      return a;
+    }
+    function cleanup() {
+      window.Session.setAdapter(originalAdapter);
+      demoCfg();
+      window.D.setRealToday('2026-09-22');
+      if (window.Store.setUserScope) window.Store.setUserScope(null);
+      window.location.hash = originalHash || '#/command';
+      window.App.render();
+    }
+
+    return Promise.resolve()
+      /* ---------- 1. Date rule: live = real clock, demo = seed ---------- */
+      .then(function () {
+        window.D.setRealToday('2026-10-21');
+        demoCfg();
+        ok('demo mode keeps the fixed simulated date (deterministic narrative)',
+           window.D.today() === '2026-09-22');
+        liveCfg();
+        ok('live mode uses the real local date, not the demo date',
+           window.D.today() === '2026-10-21' && window.D.today() !== '2026-09-22');
+        ok('live mode derives the day name and long date from the real date',
+           window.D.formatLong(window.D.today()) === 'Wednesday, 21 October');
+        demoCfg();
+        /* Seeded meetings keep their original (historical) dates. */
+        var m1 = window.Store.meeting('m1');
+        ok('seeded historical meetings keep their authored dates',
+           !!m1 && m1.date === '2026-09-15');
+        window.D.setRealToday('2026-09-22');
+        return null;
+      })
+      /* ---------- 2. Per-user browser scope ---------- */
+      .then(function () {
+        window.Store.setUserScope('user-a');
+        window.Store.mut.createTask({ title: 'User A private task', status: 'Inbox' });
+        window.Store.mut.addUserMeeting({ title: 'User A private meeting', summary: 'private' });
+        var aTasks = window.Store.tasks().filter(function (t) { return t.title === 'User A private task'; });
+        var aMeetings = window.Store.meetings().filter(function (m) { return m.title === 'User A private meeting'; });
+        window.Store.setUserScope('user-b');
+        var bTasks = window.Store.tasks().filter(function (t) { return t.title === 'User A private task'; });
+        var bMeetings = window.Store.meetings().filter(function (m) { return m.title === 'User A private meeting'; });
+        ok('a second browser scope cannot see the first scope records',
+           aTasks.length === 1 && aMeetings.length === 1 &&
+           bTasks.length === 0 && bMeetings.length === 0);
+        ok('each scope uses its own storage key',
+           window.Store.storageKey() !== 'lifeos.sim.v1' &&
+           window.Store.currentScope() === 'user-b');
+        /* Signing out returns to the shared scope without erasing the
+           signed-out user's own stored records. */
+        window.Store.setUserScope(null);
+        var stillThere = true;
+        try {
+          var raw = window.localStorage.getItem('lifeos.sim.v1.user-a');
+          stillThere = !!raw && raw.indexOf('User A private task') !== -1;
+        } catch (e) { stillThere = false; }
+        ok('signing out clears in-memory state but keeps the user own records',
+           window.Store.currentScope() === null && stillThere === true);
+        return null;
+      })
+      /* ---------- 3. Two live accounts: A cannot see B ---------- */
+      .then(function () {
+        liveCfg();
+        mockA = makeMockSupabase();
+        uidA = mockA._seedUser('ada@example.com', 'Ada Lovelace');
+        mockA._setCurrent(uidA);
+        var adapterA = useAdapter(mockA);
+        return adapterA.restore().then(function () {
+          window.Store.setUserScope(uidA);
+          return window.Store.mut.createTask({ title: 'Ada only task', status: 'Inbox' });
+        });
+      })
+      .then(function (r) {
+        ok('a live account creates its own task in its own workspace',
+           !!r && r.ok === true && mockA._inserted().length === 1 &&
+           mockA._inserted()[0].row.user_id === uidA);
+        mockB = makeMockSupabase();
+        uidB = mockB._seedUser('grace@example.com', 'Grace Hopper');
+        mockB._setCurrent(uidB);
+        var adapterB = useAdapter(mockB);
+        return adapterB.restore().then(function () {
+          window.Store.setUserScope(uidB);
+          window.dispatchEvent(new CustomEvent('supabase-auth-ready'));
+          return waitFor(function () { return window.Store.tasks().length === 0 ? true : null; });
+        });
+      })
+      .then(function () {
+        ok('the second live account sees none of the first account records',
+           window.Store.tasks().length === 0 &&
+           window.Store.mutable().newTasks.length === 0);
+        /* Identity: the second account must show ITS OWN name. */
+        ok('each live account shows its own profile name',
+           window.Identity.displayName() === 'Grace Hopper' &&
+           window.Identity.firstName() === 'Grace');
+        /* Switching back restores the first account's own name. */
+        var adapterA2 = useAdapter(mockA);
+        return adapterA2.restore().then(function () {
+          window.Store.setUserScope(uidA);
+          ok('switching accounts updates the displayed identity immediately',
+             window.Identity.displayName() === 'Ada Lovelace' &&
+             window.Identity.firstName() === 'Ada');
+        });
+      })
+      .then(function () {
+        /* The seed persona must never appear for a live account. */
+        var liveUser = window.Store.user();
+        ok('a live account never inherits the demo persona profile',
+           liveUser.name === 'Ada Lovelace' &&
+           liveUser.email === 'ada@example.com' &&
+           window.Store.integrations().length === 0 &&
+           window.Store.events().length === 0 &&
+           window.Store.emails().length === 0);
+        return null;
+      })
+      /* ---------- 4. Notetaker ---------- */
+      .then(function () {
+        var NT = window.EnginesNotetaker;
+        ok('notetaker rejects an unsupported file type',
+           NT.validateFile({ name: 'photo.png', type: 'image/png', size: 10 }).ok === false);
+        ok('notetaker rejects an empty file',
+           NT.validateFile({ name: 'a.txt', type: 'text/plain', size: 0 }).ok === false);
+        ok('notetaker rejects a file over the size limit',
+           NT.validateFile({ name: 'a.txt', type: 'text/plain', size: 26 * 1024 * 1024 }).ok === false);
+        ok('notetaker accepts a transcript file',
+           NT.validateFile({ name: 'notes.txt', type: 'text/plain', size: 120 }).ok === true);
+        ok('notetaker accepts a recording',
+           NT.validateFile({ name: 'call.m4a', type: 'audio/mp4', size: 120 }).ok === true);
+
+        var text = 'ADA: We agreed to go with the three tier option.\n' +
+                   'GRACE: I will send the revised pricing by Friday.\n' +
+                   'ADA: Action: John to follow up the invoice approval.';
+        var a = NT.analyse(text, {});
+        ok('notetaker extracts a decision, an action item and a deadline',
+           a.decisions.length >= 1 && a.actionItems.length >= 1 && a.deadlines.length >= 1);
+        ok('notetaker summary is extractive (built from the supplied text)',
+           a.summary.indexOf('three tier') !== -1);
+        ok('notetaker refuses to transcribe a recording without a provider (no fabrication)',
+           (function () {
+             return NT.transcribe({ name: 'call.m4a', type: 'audio/mp4', size: 100 })
+               .then(function (res) { return res.ok === false && !!res.error; });
+           })());
+        return NT.transcribe({ name: 'call.m4a', type: 'audio/mp4', size: 100 });
+      })
+      .then(function (res) {
+        ok('a recording is refused with an explanation instead of a fake transcript',
+           res.ok === false && res.text === undefined);
+        /* Save a meeting through the real store path. */
+        var analysis = window.EnginesNotetaker.analyse('ADA: We agreed to ship on Friday.', {});
+        var mt = window.EnginesNotetaker.buildMeeting({ analysis: analysis, title: 'Notetaker test meeting' });
+        var saved = window.Store.mut.addUserMeeting(mt);
+        ok('a saved notetaker meeting belongs to the signed-in account workspace',
+           !!saved && window.Store.meetings().some(function (m) { return m.title === 'Notetaker test meeting'; }));
+        ok('a notetaker meeting carries its summary and decisions',
+           !!saved && saved.summary.length > 0 && saved.decisions.length >= 1);
+        return null;
+      })
+      /* ---------- 5. Response templates ---------- */
+      .then(function () {
+        var RT = window.ResponseTemplates;
+        ok('response templates are a library, not personal records',
+           RT.all().length >= 4 && RT.all().every(function (t) { return !!t.body && !!t.name; }));
+        var body = RT.personalise(RT.byId('ack-receipt'), { name: 'John', me: 'Ada' });
+        ok('response templates personalise from the signed-in account and the message',
+           body.indexOf('Hi John,') !== -1 && body.indexOf('Ada') !== -1 &&
+           body.indexOf('{{') === -1);
+        var before = JSON.stringify(window.Store.mutable().repliesSent);
+        RT.personalise(RT.byId('ack-receipt'), { name: 'John', me: 'Ada' });
+        ok('personalising a template sends nothing',
+           JSON.stringify(window.Store.mutable().repliesSent) === before);
+        return null;
+      })
+      /* ---------- 6. Fail closed on a broken configuration ---------- */
+      .then(function () {
+        window.Session.setAdapter(window.SupabaseAuth.MisconfiguredAdapter);
+        window.location.hash = '#/welcome';
+        window.App.render();
+        var txt = document.getElementById('view').textContent;
+        ok('a broken deployment configuration shows a visible error instead of a blank screen',
+           txt.indexOf('not configured') !== -1 && document.getElementById('view').children.length > 0);
+        cleanup();
+        ok('demo adapter, config and scope are restored after the repair tests',
+           window.Session.getAdapter() === originalAdapter &&
+           window.SupabaseAuth.isProductionMode() === false &&
+           window.Store.currentScope() === null);
+      })
+      .catch(function (e) {
+        cleanup();
+        throw e;
+      });
+  }
+
   /* Production adapter contract tests (async). They run
       after the synchronous suite and settle before the
       summary is rendered. A rejection here is a real test
@@ -2423,6 +2994,8 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
   productionAuthTests()
     .then(deploymentConfigWiringTests)
     .then(dateFormatRegressionTests)
+    .then(freshWorkspaceIsolationTests)
+    .then(coreFeatureRepairTests)
     .then(finish, function (e) {
       fails++;
       lines.push('THROW async production adapter / config wiring tests :: ' +
