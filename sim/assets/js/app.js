@@ -326,6 +326,30 @@
       shell.classList.toggle('is-auth', isAuthShellRoute(r.path));
     }
 
+    /* A live deployment whose configuration is missing or unusable
+       must fail VISIBLY, not silently fall back to a shared demo
+       (which is how one account could ever see another account's
+       screen). Show the reason and keep the app locked. */
+    var adapter = (window.Session && window.Session.getAdapter) ? window.Session.getAdapter() : null;
+    if (adapter && adapter.misconfigured) {
+      root.appendChild(window.UI.page('Life OS is not configured',
+        'This deployment cannot create a secure session, so no account data is shown.',
+        el('div.stack', [
+          el('div.alert.alert-warn', {
+            text: (window.SupabaseAuth && window.SupabaseAuth.configError) ?
+              window.SupabaseAuth.configError() :
+              'The production configuration is missing or invalid.'
+          }),
+          el('div.s.faint', {
+            text: 'Live mode requires a valid Supabase URL and publishable key in the ' +
+                  'deployment environment. Until then the app stays locked and shows no ' +
+                  'demo data, so no one can mistake seeded content for their own.'
+          })
+        ])
+      ));
+      return;
+    }
+
     switch (r.path) {
       case '/welcome':   window.ViewAuth.welcome(root); break;
       case '/signin':    window.ViewAuth.signIn(root); break;
@@ -356,7 +380,9 @@
 
   function navState(path) {
     var nav = path === '/waiting' ? 'commitments' : path.replace('/', '');
-    Array.prototype.forEach.call(document.querySelectorAll('.sidebar a'), function (a) {
+    /* Both shells carry the same data-nav links: the desktop sidebar
+       and the mobile drawer highlight together on every navigation. */
+    Array.prototype.forEach.call(document.querySelectorAll('.sidebar a, .drawer-nav a'), function (a) {
       a.classList.toggle('active', a.getAttribute('data-nav') === nav);
     });
   }
@@ -373,8 +399,21 @@
      before the first render. SupabaseAuth.bootstrap() is
      fail-closed — it never activates the demo adapter. */
   function finalizeBoot() {
+    syncUserScope();
     if (!location.hash) location.hash = window.Session.isAuthenticated() ? '#/command' : '#/welcome';
     render();
+  }
+
+  /* Point the persisted browser layer at the signed-in account.
+     The session is the ONLY source of the user id here — never a
+     display name, an email address or a client-supplied value. */
+  function syncUserScope() {
+    var u = (window.Session && window.Session.currentUser) ? window.Session.currentUser() : null;
+    var id = (u && u.userId) ? u.userId : null;
+    if (window.Store && typeof window.Store.setUserScope === 'function') {
+      window.Store.setUserScope(id);
+    }
+    return id;
   }
 
   function boot() {
@@ -393,7 +432,6 @@
       /* Demo mode (default): finish synchronously. */
       finalizeBoot();
     }
-
     document.addEventListener('keydown', function (e) {
       if (e.key === '/' && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) {
         e.preventDefault();
@@ -451,6 +489,17 @@
         window.UI.btn('Sign out', 'danger', function () {
           m.close();
           window.Session.signOut();         /* delegates to the active adapter */
+          /* Drop cached live rows NOW so the next sign-in (any
+             account) can never render the previous user's tasks. */
+          if (window.Store && typeof window.Store.clearRemoteState === 'function') {
+            window.Store.clearRemoteState();
+          }
+          /* Leave the signed-in scope: in-memory state for that
+             account is dropped (the next account must not inherit it)
+             while their own persisted records are kept untouched. */
+          if (window.Store && typeof window.Store.setUserScope === 'function') {
+            window.Store.setUserScope(null);
+          }
           var prod = (window.SupabaseAuth && typeof window.SupabaseAuth.isProductionMode === 'function')
             ? window.SupabaseAuth.isProductionMode() : false;
           window.UI.toast(prod ? 'Signed out' : 'Signed out — demo session cleared', 'ok');
@@ -471,6 +520,7 @@
     prepareAll: prepareAll,
     badges: badges,
     signOut: signOut,
+    syncUserScope: syncUserScope,
     boot: boot
   };
 

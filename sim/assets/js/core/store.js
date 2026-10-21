@@ -13,6 +13,19 @@
   var listeners = [];
   var state = null;
 
+  /* ---------- Per-user scope ----------
+     The browser-persisted layer is namespaced per authenticated user
+     so that signing out and signing in as somebody else can never
+     show the previous user's local approvals, notes or tasks.
+     IMPORTANT: this is HYGIENE, not the security boundary. The
+     security boundary for real accounts is the server: Supabase Auth
+     for identity and Row Level Security (user_id = auth.uid()) for
+     every record. Browser storage is never treated as a trust
+     boundary anywhere in this app. */
+  var scopeId = null;
+
+  function storageKey() { return scopeId ? KEY + '.' + scopeId : KEY; }
+
   /* ---------- Mutable layer (persisted) ---------- */
   function defaultMutable() {
     return {
@@ -20,6 +33,7 @@
       newTasks: [],           /* tasks created via approvals                        */
       commitmentDecisions: {},/* id -> { confirmed, rejected, editedDesc, decidedAt } */
       meetingStates: {},      /* id -> { prepDone, transcript }                      */
+      userMeetings: [],       /* meetings the user recorded/uploaded themselves     */
       emailRead: {},          /* id -> true                                          */
       emailCategory: {},      /* id -> category (user re-classification override)    */
       scamFlagged: {},        /* id -> true (user confirmed a scam)                 */
@@ -47,7 +61,7 @@
   function load() {
     var m = defaultMutable();
     try {
-      var raw = window.localStorage.getItem(KEY);
+      var raw = window.localStorage.getItem(storageKey());
       if (!raw) return m;
       var parsed = JSON.parse(raw);
       Object.keys(m).forEach(function (k) {
@@ -58,9 +72,27 @@
   }
 
   function save() {
-    try { window.localStorage.setItem(KEY, JSON.stringify(state.mutable)); }
+    try { window.localStorage.setItem(storageKey(), JSON.stringify(state.mutable)); }
     catch (e) { /* quota / private mode — simulation continues without persistence */ }
   }
+
+  /* Switch the persisted layer to another authenticated user (or to
+     the signed-out scope). The previous user's records are SAVED under
+     their own key - logging out never erases them - but they are
+     dropped from memory so the next account cannot see them. */
+  function setUserScope(userId) {
+    var next = userId || null;
+    if (scopeId === next) return false;
+    if (state) save();                       /* persist under the OLD scope */
+    scopeId = next;
+    state = { mutable: load() };            /* start from the new scope   */
+    clearRemoteState();                     /* no cached rows cross users */
+    notify();
+    return true;
+  }
+
+  function currentScope() { return scopeId; }
+
 
   /* ---------- Remote task persistence (live mode) ----------
      In live mode, user-created tasks are written to and read from the
@@ -71,6 +103,7 @@
   var remoteTasks = [];
   var remoteLoaded = false;
   var remoteError = null;
+  var lastRemoteUserId = null;
 
   function isLiveMode() {
     var m = (window.Config && (window.Config.get('LIFEOS_MODE') || window.Config.get('LIFEOS_ENV'))) || '';
@@ -87,30 +120,80 @@
     return (window.SupabaseAuth && typeof window.SupabaseAuth.client === 'function')
       ? window.SupabaseAuth.client() : null;
   }
+  /* True for UUID strings only. The app's display fields (project
+     names, legacy contact keys like 'c1', dependency keys like 'k2')
+     are NOT valid foreign keys — sending them to uuid columns fails
+     the insert, so they are nulled remotely and kept as local
+     display overlays instead. */
+  function isUuid(v) {
+    return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  }
+  /* Bidirectional status vocabulary: UI labels <-> public.tasks CHECK
+     values. Round-trips are stable both ways. */
+  var STATUS_TO_DB = {
+    'Inbox': 'open', 'Planned': 'deferred', 'In Progress': 'in_progress',
+    'Waiting': 'blocked', 'Completed': 'completed', 'Cancelled': 'cancelled',
+    'Overdue': 'open',
+    'open': 'open', 'in_progress': 'in_progress', 'blocked': 'blocked',
+    'completed': 'completed', 'cancelled': 'cancelled', 'deferred': 'deferred'
+  };
+  var STATUS_FROM_DB = {
+    'open': 'Inbox', 'deferred': 'Planned', 'in_progress': 'In Progress',
+    'blocked': 'Waiting', 'completed': 'Completed', 'cancelled': 'Cancelled'
+  };
+  function toDbPriority(p) {
+    if (p === 'high') return 80;
+    if (p === 'low') return 20;
+    if (typeof p === 'number' && isFinite(p)) return Math.max(0, Math.min(100, Math.round(p)));
+    return 50;
+  }
+  function toDbSource(s) {
+    if (s && typeof s === 'object') s = s.type;
+    var valid = ['email', 'meeting', 'manual', 'followup', 'ai_suggested'];
+    s = (s === undefined || s === null) ? 'manual' : String(s);
+    return valid.indexOf(s) !== -1 ? s : 'manual';
+  }
   /* Map the store's task shape to the public.tasks schema. */
   function toDbTask(t, userId) {
-    var status = t.status || 'open';
-    if (status === 'Inbox' || status === 'Planned') status = 'open';
-    var priority = 50;
-    if (t.priority === 'high') priority = 80;
-    else if (t.priority === 'low') priority = 20;
-    else if (typeof t.priority === 'number') priority = t.priority;
+    var createdAt = null;
+    if (t.created) {
+      var cd = new Date(t.created.length > 10 ? t.created : t.created + 'T00:00:00Z');
+      if (!isNaN(cd.getTime())) createdAt = cd.toISOString();
+    }
     return {
       task_id: t.id,
       user_id: userId,
       title: t.title,
       description: t.description || null,
-      status: status,
-      priority: priority,
+      status: STATUS_TO_DB[t.status] || 'open',
+      priority: toDbPriority(t.priority),
       due_date: t.dueDate || null,
-      source: t.source || 'manual',
-      project_id: t.project || null,
-      contact_id: t.contactId || null,
-      dependency_id: t.blockedBy || null,
-      created_at: t.created ? (new Date(t.created + 'T00:00:00Z').toISOString()) : null
+      source: toDbSource(t.source),
+      project_id: isUuid(t.project) ? t.project : null,
+      contact_id: isUuid(t.contactId) ? t.contactId : null,
+      dependency_id: isUuid(t.blockedBy) ? t.blockedBy : null,
+      created_at: createdAt
     };
   }
-  /* Map a public.tasks row back to the store's task shape. */
+  /* Restore the in-memory copy of a remote task after a failed
+     background save, with a user-safe notice. The next successful
+     load clears the notice. */
+  function rollbackRemoteTask(id, before) {
+    for (var j = 0; j < remoteTasks.length; j++) {
+      if (remoteTasks[j].id === id) remoteTasks[j] = before;
+    }
+    remoteError = 'Could not save the change. Please try again.';
+    notify();
+  }
+  /* Drop all cached remote rows. Called on sign-out (see App.signOut)
+     and superseded on account switch inside loadRemoteTasks: the next
+     render must never show the previous account's tasks. */
+  function clearRemoteState() {
+    remoteTasks = []; remoteLoaded = false; lastRemoteUserId = null;
+    remoteError = null; notify();
+  }
+  /* Map a public.tasks row back to the store's task shape. Statuses
+     are mapped back to the UI vocabulary so list filters keep working. */
   function fromDbTask(row) {
     var priority = 'medium';
     if (row.priority >= 70) priority = 'high';
@@ -119,7 +202,7 @@
       id: row.task_id,
       title: row.title,
       description: row.description,
-      status: row.status,
+      status: STATUS_FROM_DB[row.status] || row.status,
       priority: priority,
       dueDate: row.due_date,
       dueTime: null,
@@ -136,6 +219,12 @@
     var client = supabaseClient();
     var userId = currentUserId();
     if (!client || !userId) { remoteLoaded = true; return Promise.resolve(); }
+    /* Account switch: drop the previous user's cached rows BEFORE the
+       new fetch resolves so stale tasks are never rendered. */
+    if (lastRemoteUserId && userId !== lastRemoteUserId) {
+      remoteTasks = []; remoteError = null; notify();
+    }
+    lastRemoteUserId = userId;
     return client.from('tasks').select('*').eq('user_id', userId)
       .then(function (r) {
         /* A resolved response can still carry an error — treat it as a
@@ -164,6 +253,9 @@
 
   function contact(id) {
     if (!id) return null;
+    /* Live mode has no seed address book: every account starts
+       clean, and live contact references never match seed ids. */
+    if (isLiveMode()) return null;
     for (var i = 0; i < seed().contacts.length; i++) {
       if (seed().contacts[i].id === id) return seed().contacts[i];
     }
@@ -174,9 +266,15 @@
     return c ? c.name : (id ? 'Unknown contact' : '—');
   }
 
-  /** Tasks = seed tasks (with overrides applied) + user-created tasks */
+  /** Tasks = seed tasks (with overrides applied) + user-created tasks.
+     In live mode the global demo seed list and the shared local
+     newTasks are EXCLUDED: remoteTasks (scoped to the signed-in user
+     by RLS) is the source of truth, so one account never sees
+     another's data or sample content. */
   function tasks() {
     var out = [];
+    var live = isLiveMode();
+    if (!live) {
     seed().tasks.forEach(function (t) {
       var ov = state.mutable.taskOverrides[t.id] || {};
       if (ov.deleted) return;
@@ -192,8 +290,24 @@
       if (ov.project !== undefined) copy.project = ov.project;
       out.push(copy);
     });
-    remoteTasks.forEach(function (t) { out.push(t); });
-    state.mutable.newTasks.forEach(function (t) { out.push(t); });
+    } /* end demo-only seed list */
+    remoteTasks.forEach(function (t) {
+      /* Remote rows are canonical for DB-backed fields. Local-only
+         display fields (no DB column) ride along as an overlay so
+         edits to them are never silently dropped from the view. */
+      var copy = {};
+      Object.keys(t).forEach(function (k) { copy[k] = t[k]; });
+      var ov = state.mutable.taskOverrides[t.id] || {};
+      if (ov.dueTime !== undefined) copy.dueTime = ov.dueTime;
+      if (ov.reminder !== undefined) copy.reminder = ov.reminder;
+      if (ov.project !== undefined) copy.project = ov.project;
+      if (ov.contactId !== undefined) copy.contactId = ov.contactId;
+      if (ov.blockedBy !== undefined) copy.blockedBy = ov.blockedBy;
+      out.push(copy);
+    });
+    if (!live) {
+      state.mutable.newTasks.forEach(function (t) { out.push(t); });
+    }
     return out;
   }
   function task(id) {
@@ -206,7 +320,13 @@
   }
 
   /** Commitments with user decisions applied */
+  /* Seeded collections below are demo-only. In live mode every
+     account starts with a clean workspace: these readers return
+     empty so no sample content can appear in a real account, and
+     so it cannot reappear after restart, sign-out/sign-in, or
+     account switching. Demo mode is unchanged. */
   function commitments() {
+    if (isLiveMode()) return [];
     return seed().commitments.map(function (k) {
       var copy = {};
       Object.keys(k).forEach(function (x) { copy[x] = k[x]; });
@@ -226,6 +346,7 @@
   }
 
   function followUps() {
+    if (isLiveMode()) return [];
     return seed().followUps.map(function (f) {
       var copy = {};
       Object.keys(f).forEach(function (x) { copy[x] = f[x]; });
@@ -235,14 +356,30 @@
   }
 
   function meetings() {
-    return seed().meetings.map(function (m) {
+    /* In live mode the account's meetings are the ones the USER
+       recorded or uploaded (their own workspace). The seeded
+       narrative belongs to the demo persona only. */
+    /* The user's OWN recordings sit alongside the seeded narrative in
+       demo mode (they are marked userCreated), and are the only
+       meetings a live account has. */
+    var out = state.mutable.userMeetings.map(function (m) {
+      var copy = {};
+      Object.keys(m).forEach(function (x) { copy[x] = m[x]; });
+      var st = state.mutable.meetingStates[m.id] || {};
+      copy.prepDone = !!st.prepDone;
+      if (st.transcript) copy.transcript = st.transcript;
+      return copy;
+    });
+    if (isLiveMode()) return out;
+    seed().meetings.forEach(function (m) {
       var copy = {};
       Object.keys(m).forEach(function (x) { copy[x] = m[x]; });
       var st = state.mutable.meetingStates[m.id] || {};
       copy.prepDone = !!st.prepDone;
       if (st.transcript) copy.transcript = st.transcript;   /* user-editable transcript */
-      return copy;
+      out.push(copy);
     });
+    return out;
   }
   function meeting(id) {
     var all = meetings();
@@ -251,6 +388,7 @@
   }
 
   function events() {
+    if (isLiveMode()) return [];
     return seed().events.map(function (e) {
       var copy = {};
       Object.keys(e).forEach(function (x) { copy[x] = e[x]; });
@@ -265,6 +403,7 @@
   }
 
   function emails() {
+    if (isLiveMode()) return [];
     return seed().emails.map(function (e) {
       var copy = {};
       Object.keys(e).forEach(function (x) { copy[x] = e[x]; });
@@ -281,6 +420,7 @@
   function emailCategory(id) { return state.mutable.emailCategory[id] || null; }
 
   function documents() {
+    if (isLiveMode()) return [];
     return seed().documents.map(function (d) {
       var copy = {};
       Object.keys(d).forEach(function (x) { copy[x] = d[x]; });
@@ -295,6 +435,10 @@
   }
 
   function integrations() {
+    /* Seeded integration health is a demo fixture. Real accounts get
+       their real connection state from the server, so the seed list
+       (Gmail/Zoom/transcription "connected") must never appear. */
+    if (isLiveMode()) return [];
     return seed().integrations.map(function (i) {
       var copy = {};
       Object.keys(i).forEach(function (k) { copy[k] = i[k]; });
@@ -305,9 +449,29 @@
   }
   function user() {
     var u = {};
-    Object.keys(seed().user).forEach(function (k) { u[k] = seed().user[k]; });
+    var live = isLiveMode();
+    if (live) {
+      /* Real account: identity facts come from the AUTH session (the
+         user's own Supabase profile). The demo seed profile — which
+         carries the developer persona's name — belongs to nobody and
+         must never be presented to a signed-in real user. */
+      var s = (window.Session && window.Session.currentUser) ? window.Session.currentUser() : null;
+      u.name = (s && s.name) || null;
+      u.email = (s && s.email) || null;
+      u.timezone = (s && s.timezone) ||
+        (window.D && window.D.timeZone ? window.D.timeZone() : 'UTC');
+      u.subscription = (s && s.subscription) || null;
+      u.role = undefined;
+    } else {
+      Object.keys(seed().user).forEach(function (k) { u[k] = seed().user[k]; });
+    }
     u.autonomy = state.mutable.autonomy;
-    u.learnedPrefs = seed().user.learnedPrefs.concat(state.mutable.learnedPrefs);
+    /* Seed learned-prefs are demo fixtures for the Control Center
+       display. In live mode only the device's own learned prefs
+       apply — a fresh account shows none. */
+    u.learnedPrefs = live
+      ? state.mutable.learnedPrefs.slice()
+      : seed().user.learnedPrefs.concat(state.mutable.learnedPrefs);
     u.permissions = state.mutable.permissions.slice();
     u.oneTouchTemplates = state.mutable.oneTouchTemplates.map(function (t) {
       var c = {}; Object.keys(t).forEach(function (k) { c[k] = t[k]; });
@@ -513,6 +677,51 @@
       state.mutable.meetingStates[id] = st; commit();
     },
     saveTranscript: function (id, turns) { mut.updateTranscript(id, turns); },
+    /* ---------- User-owned meetings (the AI notetaker) ----------
+       A meeting the user recorded or uploaded belongs to the signed-in
+       account. It is stored in the account's own scope, so it can
+       never appear in another user's workspace. In demo mode these
+       sit alongside the seeded narrative (clearly marked as the
+       user's own recordings). */
+    addUserMeeting: function (meeting) {
+      if (!meeting || !meeting.title) return null;
+      var m = {
+        id: meeting.id || uid('um'),
+        title: meeting.title,
+        date: meeting.date || window.D.today(),
+        start: meeting.start || null,
+        end: meeting.end || null,
+        contactIds: meeting.contactIds || [],
+        audioRef: meeting.audioRef || null,
+        source: meeting.source || 'Recorded in Life OS',
+        summary: meeting.summary || '',
+        decisions: meeting.decisions || [],
+        actionItems: meeting.actionItems || [],
+        deadlines: meeting.deadlines || [],
+        followUps: meeting.followUps || [],
+        transcript: meeting.transcript || [],
+        extraction: meeting.extraction || 'demo',
+        userCreated: true
+      };
+      state.mutable.userMeetings.unshift(m);
+      commit();
+      return m;
+    },
+    updateUserMeeting: function (id, patch) {
+      for (var i = 0; i < state.mutable.userMeetings.length; i++) {
+        if (state.mutable.userMeetings[i].id !== id) continue;
+        Object.keys(patch).forEach(function (k) { state.mutable.userMeetings[i][k] = patch[k]; });
+        commit();
+        return state.mutable.userMeetings[i];
+      }
+      return null;
+    },
+    removeUserMeeting: function (id) {
+      var before = state.mutable.userMeetings.length;
+      state.mutable.userMeetings = state.mutable.userMeetings.filter(function (m) { return m.id !== id; });
+      if (state.mutable.userMeetings.length !== before) { commit(); return true; }
+      return false;
+    },
     updateTask: function (id, patch) {
       /* User-created tasks live in newTasks — edit them in place
          (the override layer only applies to seed tasks). */
@@ -521,6 +730,45 @@
         if (nt[i].id === id) {
           Object.keys(patch).forEach(function (k) { nt[i][k] = patch[k]; });
           commit();
+          return;
+        }
+      }
+      /* Live mode: remote rows are canonical for DB-backed fields.
+         Apply the patch to the in-memory copy immediately, persist
+         the DB-backed fields to Supabase in the background, and keep
+         local-only display fields (no DB column) as a persistent
+         overlay (see tasks()). Signature stays synchronous; on
+         failure the in-memory copy rolls back with a user-safe
+         notice — never silent divergence. */
+      if (isLiveMode()) {
+        for (var r = 0; r < remoteTasks.length; r++) {
+          if (remoteTasks[r].id !== id) continue;
+          var before = {};
+          Object.keys(remoteTasks[r]).forEach(function (k) { before[k] = remoteTasks[r][k]; });
+          var dbPatch = {};
+          Object.keys(patch).forEach(function (k) {
+            if (k === 'title') { remoteTasks[r].title = patch[k]; dbPatch.title = patch[k]; }
+            else if (k === 'description') { remoteTasks[r].description = patch[k]; dbPatch.description = patch[k]; }
+            else if (k === 'status') { remoteTasks[r].status = patch[k]; dbPatch.status = STATUS_TO_DB[patch[k]] || 'open'; }
+            else if (k === 'priority') { remoteTasks[r].priority = patch[k]; dbPatch.priority = toDbPriority(patch[k]); }
+            else if (k === 'dueDate') { remoteTasks[r].dueDate = patch[k]; dbPatch.due_date = patch[k]; }
+          });
+          var ovLive = state.mutable.taskOverrides[id] || {};
+          ['dueTime', 'reminder', 'project', 'contactId', 'blockedBy'].forEach(function (k) {
+            if (patch[k] !== undefined) ovLive[k] = patch[k];
+          });
+          state.mutable.taskOverrides[id] = ovLive;
+          commit();
+          if (Object.keys(dbPatch).length > 0) {
+            var liveClient = supabaseClient();
+            if (liveClient) {
+              liveClient.from('tasks').update(dbPatch).eq('task_id', id)
+                .then(function (res) {
+                  if (res && res.error) rollbackRemoteTask(id, before);
+                })
+                .catch(function () { rollbackRemoteTask(id, before); });
+            }
+          }
           return;
         }
       }
@@ -691,9 +939,18 @@
     subscribe: subscribe,
     seed: seed,
     mutable: function () { return state.mutable; },
-    contacts: function () { return seed().contacts; },
+    /* Per-user scope (see the note above: hygiene, not the security
+       boundary — the server enforces ownership with RLS). */
+    setUserScope: setUserScope,
+    currentScope: currentScope,
+    storageKey: storageKey,
+    contacts: function () { return isLiveMode() ? [] : seed().contacts; },
+    /* Live-mode flag for call sites that read seed fixtures
+       directly (reminders): they must stay empty in live mode too. */
+    isLiveMode: isLiveMode,
     contact: contact, contactName: contactName,
     tasks: tasks, task: task, activeTasks: activeTasks,
+    clearRemoteState: clearRemoteState,
     commitments: commitments, commitment: commitment,
     followUps: followUps,
     meetings: meetings, meeting: meeting,

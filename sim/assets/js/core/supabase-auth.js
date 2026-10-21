@@ -100,6 +100,7 @@
   var MIN_PASSWORD_LENGTH = 8;
 
   var PENDING = null; /* cached bootstrap promise (idempotent) */
+  var lastConfigError = null; /* user-safe reason the live config is unusable */
 
   /* ---------- Configuration / mode detection ---------- */
   function mode() {
@@ -126,15 +127,6 @@
   }
   function isPublic(path) { return !!PUBLIC[path]; }
 
-  function nameFromEmail(email) {
-    var local = ((email || '').split('@')[0] || '').trim();
-    var parts = local.split(/[._\-+]+/).filter(Boolean);
-    if (!parts.length) return null;
-    return parts.map(function (p) {
-      return p.charAt(0).toUpperCase() + p.slice(1).toLowerCase();
-    }).join(' ');
-  }
-
   /* Map a Supabase error to a user-safe message. Never surfaces raw
      provider responses or anything that could carry a secret. */
   function authErrorMessage(err) {
@@ -142,8 +134,22 @@
     var m = String(raw).toLowerCase();
     if (m.indexOf('invalid login') !== -1 || m.indexOf('invalid email') !== -1) return 'Invalid email or password.';
     if (m.indexOf('already registered') !== -1 || m.indexOf('user already') !== -1) return 'An account with this email already exists.';
+    /* Delivery failure (SMTP / custom mailer) must come BEFORE the
+       generic confirmation hint: 'Error sending confirmation email'
+       contains 'confirm' but means the mail was never sent — telling
+       the user to 'check your email' would be wrong. This is
+       mailer configuration (Supabase dashboard / ZeptoMail), never a
+       client secret, so the message stays actionable but safe. */
+    if (m.indexOf('error sending') !== -1) return 'We could not send the confirmation email. Please check the address and try again, or contact support.';
     if (m.indexOf('not confirmed') !== -1 || m.indexOf('confirm') !== -1) return 'Please confirm your email address before signing in.';
-    if (m.indexOf('password') !== -1 && m.indexOf('weak') !== -1) return 'Password is too weak.';
+    if (m.indexOf('unable to validate') !== -1 || m.indexOf('invalid format') !== -1) return 'Enter a valid email address.';
+    if (m.indexOf('database error') !== -1) return 'We could not create your profile. Please try again.';
+    if ((m.indexOf('signup') !== -1 || m.indexOf('sign up') !== -1) && m.indexOf('disabl') !== -1) return 'New account registration is currently disabled. Please contact support.';
+    /* Server-side password policy ('Password should be at least N
+       characters', 'Signup requires a valid password'). Narrowly
+       scoped so sign-in errors such as 'Invalid email or password'
+       (handled above) can never fall in here. */
+    if (m.indexOf('password') !== -1 && (m.indexOf('weak') !== -1 || m.indexOf('should be') !== -1 || m.indexOf('characters') !== -1 || m.indexOf('too short') !== -1 || m.indexOf('valid password') !== -1)) return 'Please choose a stronger password (at least 8 characters).';
     if (m.indexOf('rate') !== -1 || m.indexOf('too many') !== -1) return 'Too many attempts. Please wait and try again.';
     if (m.indexOf('network') !== -1 || m.indexOf('fetch') !== -1) return 'Network error. Please check your connection and try again.';
     return 'Could not complete the request. Please try again.';
@@ -205,11 +211,28 @@
     function normalizeUser(user, s, profile) {
       var meta = user.user_metadata || {};
       var email = user.email || meta.email || null;
-      var name = (profile && profile.name) || meta.full_name || meta.name || null;
+      /* The display name comes ONLY from the saved profile or the
+         trusted signup metadata (full_name/name written at
+         registration). It is NEVER inferred from the email address:
+         an account with no saved name keeps a null name so the
+         greeting falls back to neutral ("Welcome back").
+         Repair case: accounts created before the signup-metadata
+         fix may carry the email local part as profile.name. When
+         the metadata holds a real name and the profile exactly
+         equals the email local part, the metadata wins. */
+      var metaName = meta.full_name || meta.name || null;
+      var profileName = (profile && profile.name) || null;
+      var emailLocal = email ? String(email).split('@')[0].toLowerCase() : null;
+      var name = profileName || metaName || null;
+      if (profileName && emailLocal && metaName &&
+          profileName.toLowerCase() === emailLocal &&
+          metaName.toLowerCase() !== emailLocal) {
+        name = metaName;
+      }
       return {
         demo: false,
         userId: user.id || null,
-        name: name || nameFromEmail(email) || 'User',
+        name: name,
         email: email,
         authState: 'supabase',
         signedInAt: (s && (s.created_at || (typeof s.expires_at === 'number' && isFinite(s.expires_at) ? new Date(s.expires_at * 1000).toISOString() : s.expires_at))) || user.created_at || null,
@@ -248,6 +271,14 @@
         var sub = client.auth.onAuthStateChange(function (event, s) {
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
             refreshFromSession(s).then(notify);
+            /* A fresh sign-in (e.g. after sign-out, with no page
+               reload) must reload the user's remote-owned data: the
+               store's sign-out clearing would otherwise leave task
+               lists empty until a manual refresh. TOKEN_REFRESHED /
+               USER_UPDATED intentionally do NOT reload remote data. */
+            if (event === 'SIGNED_IN') {
+              try { window.dispatchEvent(new CustomEvent('supabase-auth-ready')); } catch (e2) {}
+            }
           } else if (event === 'SIGNED_OUT') {
             clearCache(); notify();
           }
@@ -314,6 +345,9 @@
           if (err) return { ok: false, errors: [authErrorMessage(err)] };
           var s = r && r.data && r.data.session;
           return refreshFromSession(s).then(function () {
+            /* Signed in with no page reload: tell the store to load
+               this user's remote-owned data now (see subscribe()). */
+            try { window.dispatchEvent(new CustomEvent('supabase-auth-ready')); } catch (e) {}
             return { ok: true, session: cache.session, user: cache.user };
           });
         })
@@ -338,7 +372,13 @@
       else if (password && confirm && password !== confirm) errors.push('Passwords do not match.');
       if (errors.length) return Promise.resolve({ ok: false, errors: errors });
 
-      return client.auth.signUp({ email: email, password: password, options: { data: { full_name: name } } })
+      /* The full name is sent under BOTH keys. The existing
+         public.handle_new_user() trigger (migration
+         20261001000003_rls.sql) reads raw_user_meta_data ->> 'name';
+         'full_name' is kept for Supabase conventions and any
+         consumer that reads it. Sending only 'full_name' used to
+         leave new profiles named after the email local part. */
+      return client.auth.signUp({ email: email, password: password, options: { data: { full_name: name, name: name } } })
         .then(function (r) {
           var err = r && r.error;
           if (err) return { ok: false, errors: [authErrorMessage(err)] };
@@ -346,6 +386,9 @@
           var u = r && r.data && r.data.user;
           if (s) {
             return refreshFromSession(s).then(function () {
+              /* Instant session (confirmation off): load the new
+                 user's remote-owned data now, no reload needed. */
+              try { window.dispatchEvent(new CustomEvent('supabase-auth-ready')); } catch (e) {}
               return { ok: true, session: cache.session, user: cache.user };
             });
           }
@@ -362,6 +405,27 @@
         .catch(function () { clearCache(); notify(); });
     }
 
+    /* Re-send the signup confirmation email. Used by the pending-
+       verification screen so a user whose account exists but whose
+       session was never issued can request another email without
+       re-submitting registration (which would risk duplicates). */
+    function resendConfirmation(email) {
+      email = (email || '').trim();
+      if (!email || !EMAIL_RE.test(email)) {
+        return Promise.resolve({ ok: false, errors: ['Enter a valid email address.'] });
+      }
+      if (!client.auth.resend || typeof client.auth.resend !== 'function') {
+        return Promise.resolve({ ok: false, errors: ['Email confirmation resend is not available right now.'] });
+      }
+      return client.auth.resend({ type: 'signup', email: email })
+        .then(function (r) {
+          var err = r && r.error;
+          if (err) return { ok: false, errors: [authErrorMessage(err)] };
+          return { ok: true };
+        })
+        .catch(function (e) { return { ok: false, errors: [authErrorMessage(e)] }; });
+    }
+
     function setOnChange(fn) { onChange = fn; }
 
     return {
@@ -376,6 +440,7 @@
       signIn: signIn,
       signUp: signUp,
       restore: restore,
+      resendConfirmation: resendConfirmation,
       setOnChange: setOnChange
     };
   }
@@ -394,14 +459,30 @@
 
   function ensureClient() {
     if (clientAvailable()) {
-      return Promise.resolve(window.supabase.createClient(window.Config.get('SUPABASE_URL'), window.Config.get('SUPABASE_ANON_KEY')));
+      /* createClient() THROWS on an invalid URL or key (for example a
+         masked placeholder). Left uncaught it escapes bootstrap() and
+         aborts the whole boot, which left the page blank. Catching it
+         here keeps the fail-closed promise: a broken configuration
+         produces the misconfigured adapter (protected routes blocked,
+         no session) and a visible error - never a silent demo. */
+      try {
+        return Promise.resolve(window.supabase.createClient(window.Config.get('SUPABASE_URL'), window.Config.get('SUPABASE_ANON_KEY')));
+      } catch (e) {
+        lastConfigError = 'The Supabase client could not be created from the deployed configuration.';
+        return Promise.resolve(null);
+      }
     }
     var url = clientUrl();
     if (!url) return Promise.resolve(null); /* no client and no URL → misconfigured */
     return loadScript(url)
       .then(function () {
         if (!clientAvailable()) return null;
-        return window.supabase.createClient(window.Config.get('SUPABASE_URL'), window.Config.get('SUPABASE_ANON_KEY'));
+        try {
+          return window.supabase.createClient(window.Config.get('SUPABASE_URL'), window.Config.get('SUPABASE_ANON_KEY'));
+        } catch (e2) {
+          lastConfigError = 'The Supabase client could not be created from the deployed configuration.';
+          return null;
+        }
       })
       .catch(function () { return null; });
   }
@@ -424,16 +505,23 @@
   function bootstrapProduction() {
     /* Production mode is explicitly on. NEVER fall back to DemoAuth. */
     if (!isConfigured()) {
+      lastConfigError = 'This deployment did not supply a Supabase URL and key, so accounts cannot be used.';
       window.Session.setAdapter(MisconfiguredAdapter);
       return Promise.resolve({ mode: 'production', status: 'misconfigured', adapter: MisconfiguredAdapter });
     }
     return ensureClient().then(function (client) {
       if (!client) {
+        if (!lastConfigError) {
+          lastConfigError = 'The Supabase client could not be loaded from this deployment.';
+        }
         window.Session.setAdapter(MisconfiguredAdapter);
         return { mode: 'production', status: 'misconfigured', adapter: MisconfiguredAdapter };
       }
       var adapter = create(client, {
-        onChange: function () { if (window.App && typeof window.App.render === 'function') window.App.render(); }
+        onChange: function () {
+          if (window.App && typeof window.App.syncUserScope === 'function') window.App.syncUserScope();
+          if (window.App && typeof window.App.render === 'function') window.App.render();
+        }
       });
       return adapter.restore().then(function () {
         window.Session.setAdapter(adapter);
@@ -451,6 +539,13 @@
     isConfigured: isConfigured,
     clientAvailable: clientAvailable,
     bootstrap: bootstrap,
+    /* User-safe explanation when the deployed configuration is missing
+       or unusable. Never contains a value, only a reason. */
+    configError: function () { return lastConfigError; },
+    lastConfigError: function () { return lastConfigError; },
+    /* Pure, user-safe error mapping. Exposed so the selftest can pin
+       the signup/sign-in messages without network access. */
+    authErrorMessage: authErrorMessage,
     SupabaseAuthAdapter: { create: create },
     MisconfiguredAdapter: MisconfiguredAdapter,
     loadScript: loadScript,

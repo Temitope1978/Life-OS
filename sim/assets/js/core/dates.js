@@ -10,6 +10,20 @@
 
   var SIM_TODAY = window.SEED.TODAY;
 
+  /* ---------- Which "today" applies ----------
+     DEMO mode keeps the fixed simulated date (2026-09-22) so the
+     seeded narrative stays deterministic and its dated events remain
+     historical. LIVE mode (real accounts) must show the user's ACTUAL
+     local date from the browser clock and timezone - a real My Day
+     must never claim today is the 22nd of September. */
+  function liveMode() {
+    try {
+      var m = (window.Config && (window.Config.get('LIFEOS_MODE') || window.Config.get('LIFEOS_ENV'))) || '';
+      m = String(m || 'demo').toLowerCase();
+      return m === 'live' || m === 'production';
+    } catch (e) { return false; }
+  }
+
   function parse(iso) {
     if (!iso) return null;
     var p = String(iso).slice(0, 10).split('-');
@@ -32,8 +46,11 @@
     if (!a || !b) return null;
     return Math.round((b - a) / 86400000);
   }
-  function today() { return SIM_TODAY; }
-  function tomorrow() { return addDays(SIM_TODAY, 1); }
+  /** The date the app treats as today: real local date in live
+      mode, the fixed simulated date in demo mode. */
+  function currentToday() { return liveMode() ? realToday() : SIM_TODAY; }
+  function today() { return currentToday(); }
+  function tomorrow() { return addDays(currentToday(), 1); }
   function weekdayName(isoStr) { var d = parse(isoStr); return d ? DAYS[d.getDay()] : ''; }
   function monthName(isoStr) { var d = parse(isoStr); return d ? MONTHS[d.getMonth()] : ''; }
 
@@ -58,7 +75,7 @@
   /** Relative due label: "Overdue 4 days" / "Today" / "Tomorrow" / "in 3 days" / "Friday" */
   function dueLabel(dueIso) {
     if (!dueIso) return '';
-    var diff = daysBetween(SIM_TODAY, dueIso);
+    var diff = daysBetween(currentToday(), dueIso);
     if (diff === null) return '';
     if (diff < 0) {
       var n = Math.abs(diff);
@@ -72,7 +89,7 @@
   /** CSS class for due emphasis */
   function dueClass(dueIso) {
     if (!dueIso) return '';
-    var diff = daysBetween(SIM_TODAY, dueIso);
+    var diff = daysBetween(currentToday(), dueIso);
     if (diff === null) return '';
     if (diff < 0) return 'over';
     if (diff === 0) return 'today';
@@ -80,11 +97,11 @@
   }
   function isPast(dueIso) {
     if (!dueIso) return false;
-    var diff = daysBetween(SIM_TODAY, dueIso);
+    var diff = daysBetween(currentToday(), dueIso);
     return diff !== null && diff < 0;
   }
   function daysPast(dueIso) {
-    var diff = daysBetween(SIM_TODAY, dueIso);
+    var diff = daysBetween(currentToday(), dueIso);
     return (diff !== null && diff < 0) ? Math.abs(diff) : 0;
   }
   /** "22 Sept 2026, 16:42" */
@@ -107,7 +124,7 @@
   function agoLabel(isoTs) {
     if (!isoTs) return '';
     var dStr = String(isoTs).slice(0, 10);
-    var diff = daysBetween(dStr, SIM_TODAY);
+    var diff = daysBetween(dStr, currentToday());
     if (diff === 0) return 'Today';
     if (diff === 1) return 'Yesterday';
     if (diff > 1 && diff < 7) return diff + ' days ago';

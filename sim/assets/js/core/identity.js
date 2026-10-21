@@ -80,5 +80,51 @@
     };
   }
 
-  window.Identity = { current: current };
+  /* True when the Supabase production adapter (or its fail-closed
+     placeholder) is active. Shared so every view applies the same
+     demo/production display rules. */
+  function productionMode() {
+    if (window.SupabaseAuth && typeof window.SupabaseAuth.isProductionMode === 'function') {
+      try { return !!window.SupabaseAuth.isProductionMode(); } catch (e) { return false; }
+    }
+    var a = (window.Session && window.Session.getAdapter) ? window.Session.getAdapter() : null;
+    return !!(a && (a.id === 'supabase' || a.id === 'misconfigured'));
+  }
+
+  /* The signed-in account's own display name, or null when nobody is
+     signed in. NEVER the demo seed profile: in production the seed
+     name belongs to nobody, and showing it would display one
+     person's name to another account. Demo branding is preserved
+     because the DemoAuth session itself carries the demo name. */
+  function displayName() {
+    var id = current();
+    return (id && id.userId && id.name) ? id.name : null;
+  }
+
+  /* The signed-in account's own email, or null when signed out. */
+  function displayEmail() {
+    var id = current();
+    return (id && id.userId && id.email) ? id.email : null;
+  }
+
+  /* First name for greetings ("Hello, Temitope."): the first word of
+     the signed-in account's display name, or null when signed out.
+     Never derived from anyone else's identity — displayName() above
+     is already the account's own (or null). */
+  function firstName() {
+    var n = displayName();
+    if (!n) return null;
+    var first = String(n).split(/\s+/).filter(Boolean)[0];
+    return first || null;
+  }
+
+  /* The signed-in account's timezone, or null when signed out or
+     when the profile carries none (timezone is optional in the
+     production schema). Callers fall back to the demo default. */
+  function displayTimezone() {
+    var id = current();
+    return (id && id.userId && id.timezone) ? id.timezone : null;
+  }
+
+  window.Identity = { current: current, productionMode: productionMode, displayName: displayName, displayEmail: displayEmail, displayTimezone: displayTimezone, firstName: firstName };
 })();
