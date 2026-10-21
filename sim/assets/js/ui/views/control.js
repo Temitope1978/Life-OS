@@ -19,6 +19,62 @@
     'Send internal email', 'Create calendar events', 'Create or edit documents'
   ];
 
+  /* ---------- Response templates ----------
+     Suggested wording the user can select, personalise and copy.
+     A template is NEVER sent: it fills a draft. Sending always goes
+     through the Action Authorization Layer. */
+  function responseTemplateSection() {
+    var templates = window.ResponseTemplates ? window.ResponseTemplates.all() : [];
+    var state = { id: templates.length ? templates[0].id : null };
+    var body = el('div.stack');
+
+    var select = el('select.select', templates.map(function (t) {
+      return el('option', { value: t.id, text: t.name });
+    }));
+    select.addEventListener('change', function () { state.id = select.value; render(); });
+
+    var draft = el('textarea.textarea', { rows: 8 });
+    var meta = el('div.s.faint');
+
+    function render() {
+      var tpl = window.ResponseTemplates.byId(state.id);
+      if (!tpl) return;
+      draft.value = window.ResponseTemplates.personalise(tpl, {});
+      meta.textContent = tpl.useCase;
+    }
+
+    body.appendChild(el('div.stack', [
+      el('div.field', [el('label', { text: 'Template' }), select]),
+      meta,
+      el('div.field', [el('label', { text: 'Suggested wording (editable)' }), draft]),
+      el('div.actions', [
+        el('button.btn.btn-secondary', {
+          type: 'button', text: 'Copy to clipboard', onclick: function () {
+            var text = draft.value;
+            function done() { window.UI.toast('Template copied — it is not sent', 'ok'); }
+            function fail() { window.UI.toast('Copy failed — select the text and copy it manually', 'err'); }
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done, fail);
+            } else { fail(); }
+          }
+        }),
+        el('button.btn.btn-ghost', {
+          type: 'button', text: 'Use in a reply', onclick: function () {
+            window.App.go('#/mail');
+            window.UI.toast('Open a message and choose this template from the reply box', 'ok');
+          }
+        })
+      ]),
+      el('div.s.faint', {
+        text: 'Templates are wording suggestions only. Nothing is sent from here — ' +
+              'a reply still has to be reviewed and authorised by you.'
+      })
+    ]));
+
+    render();
+    return section('Response templates', 'Suggested wording — nothing is sent', [body]);
+  }
+
   function section(title, hint, children) {
     return el('div.card', [
       el('div.card-head', [el('h2', { text: title }), hint ? el('span.hint', { text: hint }) : null]),
@@ -305,7 +361,16 @@
     var integrations = window.Store.integrations();
     var failed = integrations.filter(function (i) { return i.status !== 'connected'; }).length;
 
-    var userInitials = u.name.split(' ').map(function (p) { return p[0]; }).join('').slice(0, 2).toUpperCase();
+    /* Account card shows the signed-in account — never the demo seed
+       profile in production. Signed out (unreachable on this
+       protected view, but guarded anyway) shows neutral text. */
+    var acctName = (window.Identity && window.Identity.displayName)
+      ? window.Identity.displayName() : null;
+    var acctEmail = (window.Identity && window.Identity.displayEmail)
+      ? window.Identity.displayEmail() : null;
+    var acctTz = ((window.Identity && window.Identity.displayTimezone)
+      ? window.Identity.displayTimezone() : null) || u.timezone;
+    var userInitials = (acctName || '?').split(' ').map(function (p) { return p[0]; }).join('').slice(0, 2).toUpperCase();
 
     root.appendChild(window.UI.page('Control',
       'Your system, your rules. Nothing leaves this browser.',
@@ -349,6 +414,7 @@
         })),
 
         oneTouchSection(),
+        responseTemplateSection(),
         actionLogSection(),
 
         section('Account', null, [
@@ -361,8 +427,8 @@
               text: userInitials
             }),
             el('div.grow', [
-              el('div.t', { text: u.name }),
-              el('div.s', { text: u.email + ' · ' + u.timezone.replace('_', ' ') })
+              el('div.t', { text: acctName || 'Signed in' }),
+              el('div.s', { text: (acctEmail || '—') + ' · ' + String(acctTz || '').replace('_', ' ') })
             ])
           ]),
           el('div.s.faint', {

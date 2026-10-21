@@ -146,7 +146,7 @@
             text: (c ? c.name + ' · ' + c.org : e.external) + ' · ' + window.D.formatDateTime(e.received)
           }),
           el('div.s.faint', {
-            text: 'To: ' + window.Store.user().name + ' (' + window.Store.user().email + ') · no attachments'
+            text: 'To: ' + me().name + ' (' + me().email + ') · no attachments'
           })
         ]),
         el('div.actions', [window.UI.chip(e.unread ? 'Unread' : 'Read', e.unread ? 'warn' : 'muted'), window.UI.categoryChip(r.category), window.UI.btnSm('Close', 'ghost', onClose)])
@@ -180,6 +180,18 @@
     return wrap;
   }
 
+  /* The signed-in account's own name/email in production; the
+     demo seed profile otherwise. Never show another account's name. */
+  function me() {
+    try {
+      var idn = (window.Identity && window.Identity.current) ? window.Identity.current() : null;
+      if (idn && idn.userId && (idn.name || idn.email)) {
+        return { name: idn.name || idn.email, email: idn.email || '' };
+      }
+    } catch (e) {}
+    var u = window.Store.user();
+    return { name: u.name, email: u.email };
+  }
   function recipientOf(e) {
     var c = e.contactId ? window.Store.contact(e.contactId) : null;
     return c ? (c.email || c.name) : (e.external || '');
@@ -203,7 +215,7 @@
     var name = p ? p.name.split(' ')[0] : 'there';
     var recipient = recipientOf(e);
     var manualBody = 'Hi ' + name + ',\n\nThanks for this. I have it and I will come back to you by ' +
-      window.D.formatDate(window.D.addDays(window.D.today(), 1)) + '.\n\nBest,\n' + window.Store.user().name;
+      window.D.formatDate(window.D.addDays(window.D.today(), 1)) + '.\n\nBest,\n' + me().name;
     var tpl = matchingOneTouch(e);
     var body = el('textarea.textarea', { rows: 7, value: tpl ? tpl.body : manualBody });
 
@@ -256,9 +268,35 @@
 
     var m = window.UI.modal({
       title: 'Reply: ' + e.subject,
-      body: el('div.stack', [note, body]),
+      body: el('div.stack', [note, templatePicker(e, body), body]),
       actions: actions
     });
+  }
+
+  /* Response templates for this reply: selecting one fills the draft
+     with SUGGESTED WORDING that the user can edit. It never sends,
+     and the Action Authorization Layer still governs the send. */
+  function templatePicker(e, body) {
+    if (!window.ResponseTemplates) return null;
+    var templates = window.ResponseTemplates.all();
+    if (!templates.length) return null;
+    var sel = el('select.select', [el('option', { value: '', text: 'Use a response template…' })]
+      .concat(templates.map(function (t) {
+        return el('option', { value: t.id, text: t.name });
+      })));
+    sel.addEventListener('change', function () {
+      var tpl = window.ResponseTemplates.byId(sel.value);
+      if (!tpl) return;
+      var p = e.contactId ? window.Store.contact(e.contactId) : null;
+      body.value = window.ResponseTemplates.personalise(tpl, {
+        name: p ? p.name.split(' ')[0] : 'there',
+        subject: e.subject,
+        me: me().name
+      });
+      window.UI.toast('Template applied — edit it before you send', 'ok');
+      sel.value = '';
+    });
+    return el('div.field', [el('label', { text: 'Response template' }), sel]);
   }
 
   function render(root) {
