@@ -114,7 +114,9 @@
        autonomy column, so it is undefined in production mode. */
     var autonomyAvailable = id.autonomy !== undefined && id.autonomy !== null;
     var meta = window.UI.autonomyMeta(autonomyAvailable ? id.autonomy : 0);
-    var name = id.name;
+    /* A missing saved name stays missing here too — never swapped
+       for the seed profile or an email-derived guess. */
+    var name = id.name || 'Not provided';
     var email = id.email;
 
     root.appendChild(window.UI.page('Settings',
@@ -124,7 +126,7 @@
         /* ---------- Profile ---------- */
         section('Profile', 'Signed-in identity', [
           el('div.row', [
-            avatar(name),
+            avatar(id.name),
             el('div.grow', [
               el('div.t', { text: name }),
               el('div.s', { text: (email || '—') + ' · ' + tzLabel(id.timezone) })

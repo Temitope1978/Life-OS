@@ -105,9 +105,16 @@
 
     var waitingList = window.EnginesFollowUp.waitingOn();
 
+    /* The signed-in account's own first name — never the demo
+       seed name in production, never inferred from email. Neutral
+       when no name is saved. */
+    var who = (window.Identity && window.Identity.firstName)
+      ? window.Identity.firstName() : null;
+    var tz = ((window.Identity && window.Identity.displayTimezone)
+      ? window.Identity.displayTimezone() : null) || window.Store.user().timezone;
     return {
-      headline: 'Good morning, ' + window.Store.user().name,
-      dateLine: window.D.formatLong(window.D.today()) + ' · ' + window.Store.user().timezone.replace('_', ' '),
+      headline: who ? 'Good morning, ' + who : 'Welcome back',
+      dateLine: window.D.formatLong(window.D.today()) + ' · ' + tz.replace('_', ' '),
       lead: headlineSentence(),
       stats: {
         meetings: todayEvents.length,

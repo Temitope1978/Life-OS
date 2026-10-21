@@ -111,8 +111,10 @@
     });
   }
 
-  /** Reminders due (simulated clock: today's reminders). */
+  /** Reminders due (simulated clock: today's reminders). Live
+     accounts have no seed reminders — clean workspace. */
   function remindersDue() {
+    if (window.Store.isLiveMode && window.Store.isLiveMode()) return [];
     return window.SEED.reminders.filter(function (r) {
       return !r.done && r.dueAt.slice(0, 10) <= window.D.today();
     });

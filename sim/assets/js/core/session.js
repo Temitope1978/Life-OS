@@ -61,6 +61,11 @@
       ? adapter.restore()
       : undefined;
   }
+  function resendConfirmation(email) {
+    return (adapter && typeof adapter.resendConfirmation === 'function')
+      ? adapter.resendConfirmation(email)
+      : { ok: false, errors: ['Email confirmation resend is not available right now.'] };
+  }
 
   window.Session = {
     setAdapter: setAdapter,
@@ -74,7 +79,8 @@
     storageKey: storageKey,
     signIn: signIn,
     signUp: signUp,
-    restore: restore
+    restore: restore,
+    resendConfirmation: resendConfirmation
   };
 
   /* Adapter #1 — the existing DemoAuth. It translates the

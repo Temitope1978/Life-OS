@@ -8,11 +8,15 @@
 
   function greeting() {
     var h = window.D.realNow().getHours();
-    var u = window.Store.user();
+    /* The signed-in account's own FIRST name ("Hello, Temitope").
+       Never inferred from email, never another person's identity.
+       No saved name → neutral "Welcome back". */
+    var name = (window.Identity && window.Identity.firstName)
+      ? window.Identity.firstName() : null;
     var part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
     var tz = window.D.timeZoneLabel() || window.D.timeZone();
     return {
-      text: part + ', ' + u.name,
+      text: name ? part + ', ' + name : 'Welcome back',
       sub: window.D.realDayName() + ', ' + window.D.realDateLong() + ' · ' +
            window.D.localTime() + ' · ' + tz
     };

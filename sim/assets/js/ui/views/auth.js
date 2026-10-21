@@ -198,10 +198,36 @@
     function submit() {
       window.$.clear(errorsBox);
       if (btn) btn.disabled = true;
+      var attemptedEmail = (email.value || '').trim();
       var r = window.Session.signUp({ name: name.value, email: email.value, password: password.value, confirm: confirm.value });
       handleAuthResult(r, 'Account created — welcome, ', function (res) {
         if (btn) btn.disabled = false;
         if (!res.ok) { password.value = ''; confirm.value = ''; } /* discard typed passwords */
+        /* Email confirmation pending: the Auth user exists but no
+           session was issued. Keep the user on this screen with a
+           persistent confirmation panel (not just a toast) and a
+           resend option — never claim they are signed in. */
+        if (res.ok && res.needsConfirmation) {
+          password.value = ''; confirm.value = '';
+          var resendBtn = el('button.btn.btn-secondary.btn-sm', {
+            type: 'button', text: 'Resend confirmation email',
+            onclick: function () {
+              resendBtn.disabled = true;
+              var rr = window.Session.resendConfirmation(attemptedEmail);
+              function done2(r2) {
+                resendBtn.disabled = false;
+                window.UI.toast(r2.ok ? 'Confirmation email sent — check your inbox.' : ((r2.errors && r2.errors[0]) || 'Could not resend the email.'), r2.ok ? 'ok' : 'err');
+              }
+              if (rr && typeof rr.then === 'function') rr.then(done2, done2);
+              else done2(rr);
+            }
+          });
+          errorsBox.appendChild(el('div.alert.alert-info', [
+            el('strong', { text: 'Check your email to confirm your account. ' }),
+            el('span', { text: 'You are not signed in yet — open the confirmation link, then sign in. ' }),
+            resendBtn
+          ]));
+        }
       });
     }
 

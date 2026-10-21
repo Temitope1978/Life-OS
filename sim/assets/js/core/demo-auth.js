@@ -118,7 +118,11 @@
   }
 
   /* Create a demo session from a sign-in. The password is validated
-     in memory and discarded; it is never stored or compared. */
+     in memory and discarded; it is never stored or compared.
+     Sign-in collects no name, so none is inferred from the email
+     address: the session carries a null name and the greeting falls
+     back to neutral ("Welcome back"). Demo sign-up does collect a
+     name and keeps it. */
   function signIn(fields) {
     var v = validateSignIn(fields);
     if (!v.ok) return { ok: false, errors: v.errors };
@@ -126,7 +130,7 @@
     var s = {
       demo: true,
       userId: uid(),
-      name: nameFromEmail(email),
+      name: null,
       email: email,
       authState: 'demo',
       signedInAt: new Date().toISOString()

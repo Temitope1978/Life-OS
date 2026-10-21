@@ -35,7 +35,10 @@
     var txt;
     if (c) txt = c.initials;
     else {
-      var u = window.Store.user().name || '?';
+      /* Unknown contact: show the signed-in account's initials, or a
+         neutral placeholder — never the demo seed profile's name. */
+      var u = ((window.Identity && window.Identity.displayName)
+        ? window.Identity.displayName() : null) || '?';
       txt = u.split(' ').map(function (p) { return p[0]; }).join('').slice(0, 2).toUpperCase();
     }
     return el('span', {

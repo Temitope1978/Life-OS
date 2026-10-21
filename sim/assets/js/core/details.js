@@ -52,7 +52,12 @@
     if (!e) return null;
     var r = window.EnginesMail.classify(e);
     var c = e.contactId ? window.Store.contact(e.contactId) : null;
-    var u = window.Store.user();
+    /* Recipient is the signed-in account — never the demo seed
+       profile in production. */
+    var me = ((window.Identity && window.Identity.displayName)
+      ? window.Identity.displayName() : null) || '—';
+    var meMail = ((window.Identity && window.Identity.displayEmail)
+      ? window.Identity.displayEmail() : null) || '';
     var suspicious = r.category === 'Suspicious';
     var related = window.EnginesTasks.tasksFromEmail(e.id);
     /* The classification editor and the permitted email actions are
@@ -67,7 +72,7 @@
         el('span.s', { text: window.D.formatDateTime(e.received) + (c && c.org ? ' · ' + c.org : '') })
       ]),
       field('From', c ? c.name + ' · ' + c.org + ' · ' + c.email : (e.external || 'External sender')),
-      field('To', u.name + ' · ' + u.email),
+      field('To', meMail ? me + ' · ' + meMail : me),
       suspicious ? el('div.alert.alert-danger', {
         html: '<strong>⚠ Held for your review.</strong> This message looks like a payment-diversion scam. It has not been treated as a real instruction.'
       }) : null,
@@ -386,7 +391,8 @@
     return null;
   }
   function findReminder(id) {
-    var rs = window.SEED.reminders;
+    /* No seed reminders in live accounts. */
+    var rs = (window.Store.isLiveMode && window.Store.isLiveMode()) ? [] : window.SEED.reminders;
     for (var i = 0; i < rs.length; i++) if (rs[i].id === id) return rs[i];
     return null;
   }
