@@ -11,17 +11,25 @@
 # in this repository.
 
 [build]
-  # Run the build from the `sim` directory.
-  base = "sim"
-  # Publish the `sim` directory itself (relative to the base dir).
-  publish = "."
+  # The repository root is the base directory so that serverless
+  # functions can live outside the published site (netlify/functions)
+  # and are never served as static files.
+  base = "."
+  # Publish the PWA (the `sim` directory) - the site root is still
+  # index.html, exactly as before.
+  publish = "sim"
   # Generate the runtime environment file with plain Node.js (works on
-  # Windows for the local Netlify CLI and on Netlify's Linux builders —
+  # Windows for the local Netlify CLI and on Netlify's Linux builders -
   # the previous Bash heredoc failed on Windows). The script reads
   # SUPABASE_URL / SUPABASE_ANON_KEY, validates them, enforces the
   # server-secret guard, syntax-checks the output, and only then writes
-  # assets/js/env.js. Any failure exits non-zero and fails the deploy.
-  command = "node ../scripts/netlify-env.js"
+  # the file. Any failure exits non-zero and fails the deploy.
+  command = "node scripts/netlify-env.js sim/assets/js/env.js"
+
+[functions]
+  # Server-side only: transcription + AI analysis. These files are
+  # never part of the published site.
+  directory = "netlify/functions"
 
 [build.environment]
   # The generated browser config (sim/assets/js/env.js) intentionally

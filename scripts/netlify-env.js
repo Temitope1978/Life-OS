@@ -5,8 +5,12 @@
  * identically on Windows (local Netlify CLI) and Netlify's Linux
  * build environment. No dependencies.
  *
- * Invoked from the Netlify base directory (`sim/`):
- *   node ../scripts/netlify-env.js
+ * Usage:
+ *   node scripts/netlify-env.js [outputPath]
+ *
+ * The output path is relative to the current working directory and
+ * defaults to assets/js/env.js (the historical location, when the
+ * command is run from the `sim` base directory).
  *
  * Reads ONLY these environment variables (never prints their values):
  *   SUPABASE_URL, SUPABASE_ANON_KEY
@@ -30,6 +34,7 @@ var fs = require('fs');
 var path = require('path');
 
 var OUT_FILE = path.join('assets', 'js', 'env.js');
+if (process.argv[2]) OUT_FILE = process.argv[2];
 
 var REQUIRED_VARS = ['SUPABASE_URL', 'SUPABASE_ANON_KEY'];
 
