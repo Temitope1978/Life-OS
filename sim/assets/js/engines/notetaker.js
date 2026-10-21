@@ -133,6 +133,22 @@
       return res.text().then(function (text) {
         var data = null;
         try { data = JSON.parse(text); } catch (e) { data = null; }
+        if (!data) {
+          /* A sign-in page (not JSON) means the deployment is behind an
+             access-control layer - for example a Netlify Deploy
+             Preview that requires a Netlify sign-in. Say so plainly
+             instead of failing with a parse error. */
+          return {
+            status: res.status,
+            data: {
+              ok: false,
+              error: 'not_json',
+              message: 'The processing service returned a sign-in page instead of a result. ' +
+                       'Deploy previews sit behind a Netlify sign-in - open the preview while signed in, ' +
+                       'or use the production site.'
+            }
+          };
+        }
         return { status: res.status, data: data };
       });
     });

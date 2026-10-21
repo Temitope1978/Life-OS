@@ -27,12 +27,15 @@
    ============================================================ */
 'use strict';
 
-const MAX_UPLOAD_BYTES = Number(process.env.LIFEOS_MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
-const RATE_LIMIT = Number(process.env.LIFEOS_RATE_LIMIT_PER_MINUTE || 20);
-const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_BASE = process.env.OPENAI_API_BASE || 'https://api.openai.com/v1';
-const OPENAI_MODEL = process.env.LIFEOS_AI_MODEL || 'gpt-4o-mini';
-const TRANSCRIBE_MODEL = process.env.LIFEOS_TRANSCRIBE_MODEL || 'whisper-1';
+/* The environment is read AT CALL TIME, not when this module is
+   loaded: rotating a key then takes effect immediately, and the
+   function can be exercised in a test with a stub provider. */
+function openAiKey() { return process.env.OPENAI_API_KEY || ''; }
+function openAiBase() { return process.env.OPENAI_API_BASE || 'https://api.openai.com/v1'; }
+function aiModel() { return process.env.LIFEOS_AI_MODEL || 'gpt-4o-mini'; }
+function transcribeModel() { return process.env.LIFEOS_TRANSCRIBE_MODEL || 'whisper-1'; }
+function maxUploadBytes() { return Number(process.env.LIFEOS_MAX_UPLOAD_BYTES || 25 * 1024 * 1024); }
+function rateLimitPerMinute() { return Number(process.env.LIFEOS_RATE_LIMIT_PER_MINUTE || 20); }
 
 const AUDIO_TYPES = ['audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/m4a', 'audio/x-m4a', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/flac', 'audio/mp3'];
 const AUDIO_EXT = /\.(webm|ogg|oga|mp3|mp4|m4a|m4b|wav|aac|flac|mkv|mov)$/i;
@@ -89,22 +92,22 @@ function rateLimited(userId) {
   const b = BUCKETS[userId] || (BUCKETS[userId] = { start: now, count: 0 });
   if (now - b.start > 60000) { b.start = now; b.count = 0; }
   b.count += 1;
-  return b.count > RATE_LIMIT;
+  return b.count > rateLimitPerMinute();
 }
 
 /* ---------- transcription ---------- */
 async function transcribe(file) {
-  if (!OPENAI_KEY) {
+  if (!openAiKey()) {
     return { error: 'not_configured', message: 'No transcription provider is configured for this deployment.' };
   }
   const buf = file.buffer;
   const form = new FormData();
   form.append('file', new Blob([buf], { type: file.mimeType || 'application/octet-stream' }), file.filename || 'recording');
-  form.append('model', TRANSCRIBE_MODEL);
+  form.append('model', transcribeModel());
   form.append('response_format', 'text');
-  const res = await fetch(OPENAI_BASE + '/audio/transcriptions', {
+  const res = await fetch(openAiBase() + '/audio/transcriptions', {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + OPENAI_KEY },
+    headers: { 'Authorization': 'Bearer ' + openAiKey() },
     body: form
   });
   if (!res.ok) {
@@ -134,14 +137,14 @@ const ANALYSIS_PROMPT = [
 ].join(' ');
 
 async function analyse(text) {
-  if (!OPENAI_KEY) {
+  if (!openAiKey()) {
     return { error: 'not_configured', message: 'No AI provider is configured for this deployment.' };
   }
-  const res = await fetch(OPENAI_BASE + '/chat/completions', {
+  const res = await fetch(openAiBase() + '/chat/completions', {
     method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + OPENAI_KEY, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': 'Bearer ' + openAiKey(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model: aiModel(),
       temperature: 0.1,
       response_format: { type: 'json_object' },
       messages: [
@@ -215,8 +218,8 @@ exports.handler = async function (event) {
       }
       const buf = base64ToBuffer(body.contentBase64);
       if (!buf.length) return fail(400, 'empty_file', 'The uploaded file was empty.');
-      if (buf.length > MAX_UPLOAD_BYTES) {
-        return fail(413, 'file_too_large', 'The recording is larger than the ' + Math.round(MAX_UPLOAD_BYTES / 1048576) + ' MB limit.');
+      if (buf.length > maxUploadBytes()) {
+        return fail(413, 'file_too_large', 'The recording is larger than the ' + Math.round(maxUploadBytes() / 1048576) + ' MB limit.');
       }
       const out = await transcribe({ buffer: buf, filename: filename, mimeType: mimeType });
       if (out.error) return fail(out.error === 'not_configured' ? 503 : 502, out.error, out.message);

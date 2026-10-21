@@ -3107,6 +3107,21 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
         window.fetch = function () {
           return Promise.resolve({
             status: 200,
+            text: function () { return Promise.resolve('<html><body>Login Redirect</body></html>'); }
+          });
+        };
+        return window.EnginesNotetaker.transcribe(new Blob([new Uint8Array([1])], { type: 'audio/mp4' }))
+          .then(function (res) {
+            window.fetch = realFetch;
+            ok('a sign-in page from the backend is reported honestly (not a parse error)',
+               res.ok === false && /sign-in/i.test(res.error || ''));
+          });
+      })
+      .then(function () {
+        var realFetch = window.fetch;
+        window.fetch = function () {
+          return Promise.resolve({
+            status: 200,
             text: function () { return Promise.resolve(JSON.stringify({ ok: true, action: 'analyse', analysis: { summary: 's', decisions: [], actionItems: [], commitments: [], deadlines: [], followUps: [], topics: [], extraction: 'model' } })); }
           });
         };
