@@ -105,32 +105,78 @@
     });
   }
 
+  /* ---------- Server-side processing ----------
+     Transcription of audio and model-based analysis run in a server
+     function (netlify/functions/meeting-process.js) because the
+     provider credentials must never reach the browser. The browser
+     only sends the file and receives the result. When no backend is
+     reachable (for example inside the Android WebView, where there
+     is no /netlify/functions route) the engine says so plainly and
+     the user can still paste a transcript. */
+  function backendEndpoint() {
+    return '/.netlify/functions/meeting-process';
+  }
+
+  function callBackend(payload) {
+    var token = null;
+    try {
+      var u = (window.Session && window.Session.currentUser) ? window.Session.currentUser() : null;
+      token = (window.SupabaseAuth && window.SupabaseAuth.accessToken) ? window.SupabaseAuth.accessToken() : null;
+    } catch (e) { /* no session */ }
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = 'Bearer ' + token;
+    return fetch(backendEndpoint(), {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(payload)
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+        return { status: res.status, data: data };
+      });
+    });
+  }
+
+  function backendMessage(result, fallback) {
+    if (result && result.data && result.data.message) return result.data.message;
+    return fallback;
+  }
+
   /* Transcribe an uploaded file.
-     Returns { ok, kind: 'transcript'|'recording', text?, reason? }.
-     A recording without a configured provider is refused, never
-     faked. */
+     Returns { ok, kind: 'transcript'|'recording', text?, error? }.
+     A recording without a working backend is refused, never faked. */
   function transcribe(file) {
     var v = validateFile(file);
     if (!v.ok) return Promise.resolve({ ok: false, error: v.error });
     if (v.kind === 'recording') {
-      var provider = window.Providers && window.Providers.get ? window.Providers.get('transcription') : null;
-      var configured = provider && provider.configStatus && provider.configStatus().status === 'CONNECTED';
-      if (!configured) {
-        return Promise.resolve({
-          ok: false,
-          kind: 'recording',
-          error: 'No transcription provider is configured for this deployment, so the recording ' +
-                 'cannot be turned into a transcript here. Paste or upload a transcript file and ' +
-                 'the analysis, summary and action items are produced from it.'
+      /* The server does the transcription. If it is not configured or
+         not reachable, the user is told exactly that. */
+      return readAsBase64(file).then(function (b64) {
+        return callBackend({
+          action: 'transcribe',
+          filename: v.name,
+          mimeType: file.type || '',
+          contentBase64: b64
         });
-      }
-      /* A provider IS configured: this build still has no server-side
-         transcription endpoint, so say so rather than pretending. */
-      return Promise.resolve({
-        ok: false,
-        kind: 'recording',
-        error: 'Transcription needs a server-side endpoint, which this deployment does not expose yet. ' +
-               'Upload or paste a transcript to continue.'
+      }).then(function (res) {
+        if (!res || res.status !== 200 || !res.data || !res.data.ok) {
+          var code = res && res.data && res.data.error;
+          var msg = backendMessage(res,
+            'The recording could not be transcribed: the processing service is not available in this build.');
+          if (code === 'not_configured') {
+            msg = 'This deployment has no transcription provider configured, so recordings cannot be turned into text here. ' +
+                  'Paste or upload a transcript file instead — the summary, decisions, action items and deadlines are produced from it.';
+          }
+          return { ok: false, kind: 'recording', error: msg, code: code || 'unavailable' };
+        }
+        return { ok: true, kind: 'recording', text: res.data.transcript, name: v.name };
+      }, function () {
+        return {
+          ok: false, kind: 'recording',
+          error: 'The processing service could not be reached from this build. Paste or upload a transcript file instead.',
+          code: 'unreachable'
+        };
       });
     }
     return readTextFile(file).then(function (text) {
@@ -141,6 +187,31 @@
     }).catch(function (e) {
       return { ok: false, kind: 'transcript', error: (e && e.message) || 'The file could not be read.' };
     });
+  }
+
+  /* Read a file as base64 (for the server-side transcription call). */
+  function readAsBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () {
+        var s = String(reader.result || '');
+        var i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      reader.onerror = function () { reject(new Error('The file could not be read.')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /* Ask the server for a model-based analysis of the text.
+     Returns the analysis object, or null when no model is available
+     (the caller then keeps the deterministic rules result). */
+  function analyseRemote(text) {
+    if (!text || !text.trim()) return Promise.resolve(null);
+    return callBackend({ action: 'analyse', text: text }).then(function (res) {
+      if (!res || res.status !== 200 || !res.data || !res.data.ok) return null;
+      return res.data.analysis || null;
+    }, function () { return null; });
   }
 
   /* ---------- Understanding (deterministic rules) ---------- */
@@ -216,6 +287,8 @@
     validateFile: validateFile,
     transcribe: transcribe,
     analyse: analyse,
+    analyseRemote: analyseRemote,
+    backendEndpoint: backendEndpoint,
     buildMeeting: buildMeeting,
     sentences: sentences
   };

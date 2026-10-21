@@ -182,10 +182,12 @@
     var cache = { session: null, user: null, profile: null, ready: false };
     var onChange = opts.onChange || null;
     var subscription = null;
+    var cachedAccessToken = null;
 
     function clearCache() {
       cache.session = null; cache.user = null; cache.profile = null;
       cache.ready = false;
+      cachedAccessToken = null;
     }
     function notify() { if (typeof onChange === 'function') onChange(); }
 
@@ -298,6 +300,9 @@
         var user = (ur && ur.data && ur.data.user) || (s && s.user) || null;
         if (!user) { clearCache(); return; }
         cache.session = normalizeSession(s);
+        /* Keep the access token for calls to our own server-side
+           processing function. It lives in memory only. */
+        cachedAccessToken = (s && s.access_token) || null;
         var userId = user.id;
         return fetchProfile(userId).then(function (profile) {
           cache.profile = profile;
@@ -426,6 +431,15 @@
         .catch(function (e) { return { ok: false, errors: [authErrorMessage(e)] }; });
     }
 
+    /* The current user's access token, for calls to the server-side
+       processing function. The token is READ by the browser (the
+       browser owns the session) and sent to our own function, which
+       verifies it server-side. It is never written to storage by the
+       app and never logged. */
+    function accessToken() {
+      return cachedAccessToken;
+    }
+
     function setOnChange(fn) { onChange = fn; }
 
     return {
@@ -441,6 +455,7 @@
       signUp: signUp,
       restore: restore,
       resendConfirmation: resendConfirmation,
+      accessToken: accessToken,
       setOnChange: setOnChange
     };
   }
@@ -523,8 +538,13 @@
           if (window.App && typeof window.App.render === 'function') window.App.render();
         }
       });
+      /* Install the adapter BEFORE restoring the session. Restoring
+         notifies subscribers (which re-render the app); if the demo
+         adapter were still installed at that moment, the render would
+         see "signed out" and redirect to the welcome screen - which
+         is exactly what a page refresh used to do. */
+      window.Session.setAdapter(adapter);
       return adapter.restore().then(function () {
-        window.Session.setAdapter(adapter);
         /* Notify the store so it can load remote-owned data for the
            now-authenticated user. The store listens for this event. */
         try { window.dispatchEvent(new CustomEvent('supabase-auth-ready')); } catch (e) {}

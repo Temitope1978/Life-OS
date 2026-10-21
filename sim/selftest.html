@@ -2986,6 +2986,148 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
       });
   }
 
+  /* ---------- Session restoration, notetaker durability, templates and
+     the server-side processing contract (mock providers only) ---------- */
+  function sessionAndFeatureTests() {
+    var originalAdapter = window.Session.getAdapter();
+    var originalHash = window.location.hash;
+    var mock = null, uid = null;
+
+    function restore() {
+      window.Session.setAdapter(originalAdapter);
+      window.Config.load();
+      window.location.hash = originalHash || '#/command';
+      window.App.render();
+    }
+
+    return Promise.resolve()
+      /* 1. A restored Supabase session must keep the user signed in
+         (the adapter is installed BEFORE the session is restored). */
+      .then(function () {
+        mock = makeMockSupabase();
+        uid = mock._seedUser('restore@example.com', 'Restore Tester');
+        mock._setCurrent(uid);
+        var adapter = window.SupabaseAuth.SupabaseAuthAdapter.create(mock);
+        window.Session.setAdapter(adapter);
+        return adapter.restore();
+      })
+      .then(function () {
+        ok('a restored session keeps the account signed in',
+           window.Session.isAuthenticated() === true &&
+           window.Session.currentUser().name === 'Restore Tester');
+        ok('the restored session exposes the verified user id for server calls',
+           window.Session.currentUser().userId === uid);
+        ok('the identity resolves from the restored session',
+           window.Identity.displayName() === 'Restore Tester' &&
+           window.Identity.firstName() === 'Restore');
+        /* Signing out must clear the session AND the in-memory user
+           scope, without erasing that user's stored records. */
+        return Promise.resolve(window.Session.signOut()).then(function () {
+          ok('signing out clears the session and the identity',
+             window.Session.isAuthenticated() === false &&
+             window.Identity.displayName() === null);
+          ok('signing out leaves no access token behind',
+             !window.Session.getAdapter().accessToken ||
+             window.Session.getAdapter().accessToken() === null);
+          return null;
+        });
+      })
+      /* 2. The notetaker's working state must survive a re-render
+         (a route change used to wipe it, which made the controls
+         look dead). */
+      .then(function () {
+        /* Back to the demo adapter so the protected views are
+           reachable in this test environment. */
+        window.Session.setAdapter(originalAdapter);
+        window.DemoAuth.continueDemo();
+        window.location.hash = '#/meetings';
+        window.App.render();
+        var ta = document.querySelector('#view textarea.textarea');
+        ok('the notetaker offers a transcript input', !!ta);
+        if (ta) ta.value = 'ADA: We agreed to ship the proposal on Friday.';
+        var btn = null;
+        var btns = Array.prototype.slice.call(document.querySelectorAll('#view button'));
+        for (var i = 0; i < btns.length; i++) {
+          if ((btns[i].textContent || '').trim() === 'Analyse') { btn = btns[i]; break; }
+        }
+        ok('the notetaker has an Analyse control', !!btn);
+        if (btn) btn.click();
+        var review = document.getElementById('view').textContent.indexOf('Review before saving') !== -1;
+        ok('analysing shows the review panel', review);
+        /* Simulate the re-render that a hash change or a store update
+           causes, then check the work is still there. */
+        window.App.render();
+        ok('the notetaker work survives a re-render',
+           document.getElementById('view').textContent.indexOf('Review before saving') !== -1);
+        return null;
+      })
+      /* 3. Response templates must be visible and usable. */
+      .then(function () {
+        window.location.hash = '#/control';
+        window.App.render();
+        var txt = document.getElementById('view').textContent;
+        ok('the Control Center shows the response templates section',
+           txt.indexOf('Response templates') !== -1);
+        ok('the template panel offers a copy action',
+           txt.indexOf('Copy to clipboard') !== -1);
+        ok('the template panel states that nothing is sent',
+           /nothing is sent/i.test(txt));
+        var sel = document.querySelector('#view select.select');
+        ok('the template picker lists the templates',
+           !!sel && sel.options.length >= 4);
+        return null;
+      })
+      /* 4. The server-side processing contract (mocked fetch). */
+      .then(function () {
+        ok('the notetaker points at the server-side processing endpoint',
+           /^\/\.netlify\/functions\//.test(window.EnginesNotetaker.backendEndpoint()));
+        var realFetch = window.fetch;
+        var seen = null;
+        window.fetch = function (url, opts) {
+          seen = { url: url, body: JSON.parse(opts.body) };
+          return Promise.resolve({
+            status: 503,
+            text: function () { return Promise.resolve(JSON.stringify({ ok: false, error: 'not_configured', message: 'No transcription provider is configured for this deployment.' })); }
+          });
+        };
+        /* A real Blob so the FileReader path is exercised. */
+        var blob = new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mp4' });
+        blob.name = 'call.m4a';
+        return window.EnginesNotetaker.transcribe(blob)
+          .then(function (res) {
+            window.fetch = realFetch;
+            ok('the request goes to the server endpoint with the action',
+               seen && seen.url.indexOf('/.netlify/functions/') !== -1 && seen.body.action === 'transcribe');
+            ok('a recording is refused honestly when no provider is configured (never faked)',
+               res.ok === false && !res.text && /not configured|no transcription provider/i.test(res.error || ''));
+          });
+      })
+      .then(function () {
+        var realFetch = window.fetch;
+        window.fetch = function () {
+          return Promise.resolve({
+            status: 200,
+            text: function () { return Promise.resolve(JSON.stringify({ ok: true, action: 'analyse', analysis: { summary: 's', decisions: [], actionItems: [], commitments: [], deadlines: [], followUps: [], topics: [], extraction: 'model' } })); }
+          });
+        };
+        return window.EnginesNotetaker.analyseRemote('ADA: We agreed to ship Friday.')
+          .then(function (ai) {
+            window.fetch = realFetch;
+            ok('the AI analysis comes from the server and is marked as model-generated',
+               !!ai && ai.extraction === 'model' && ai.summary === 's');
+          });
+      })
+      .then(function () {
+        restore();
+        ok('the demo adapter and route are restored after the feature tests',
+           window.Session.getAdapter() === originalAdapter);
+      })
+      .catch(function (e) {
+        restore();
+        throw e;
+      });
+  }
+
   /* Production adapter contract tests (async). They run
       after the synchronous suite and settle before the
       summary is rendered. A rejection here is a real test
@@ -2996,6 +3138,7 @@ Every assertion runs against the same seed and fixed date, 2026-09-22.</p>
     .then(dateFormatRegressionTests)
     .then(freshWorkspaceIsolationTests)
     .then(coreFeatureRepairTests)
+    .then(sessionAndFeatureTests)
     .then(finish, function (e) {
       fails++;
       lines.push('THROW async production adapter / config wiring tests :: ' +

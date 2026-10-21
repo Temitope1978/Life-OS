@@ -413,8 +413,10 @@
           ]);
         })),
 
-        oneTouchSection(),
+        /* Response templates sit near the top of the Control Center:
+           they are a working tool, not a buried setting. */
         responseTemplateSection(),
+        oneTouchSection(),
         actionLogSection(),
 
         section('Account', null, [

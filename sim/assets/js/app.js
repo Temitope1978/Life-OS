@@ -400,6 +400,16 @@
      fail-closed — it never activates the demo adapter. */
   function finalizeBoot() {
     syncUserScope();
+    /* A restored session must land on the app, not on the welcome
+       screen: if the session is valid but the URL is still an
+       authentication route (which happens after a refresh while the
+       previous route was public), go to the Command Center. */
+    if (window.Session.isAuthenticated()) {
+      var p = (location.hash || '').replace(/^#\/?/, '').split('/')[0];
+      if (!p || p === 'welcome' || p === 'signin' || p === 'signup') {
+        location.hash = '#/command';
+      }
+    }
     if (!location.hash) location.hash = window.Session.isAuthenticated() ? '#/command' : '#/welcome';
     render();
   }

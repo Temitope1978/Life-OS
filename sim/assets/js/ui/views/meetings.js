@@ -172,42 +172,84 @@
      engine extract what matters, review and edit the result, then
      save it into the signed-in account's own meetings. Nothing is
      saved until the user presses Save, and a recording is never
-     "transcribed" without a provider — the engine says so instead. */
+     "transcribed" without a provider — the engine says so instead.
+
+     The notetaker's working state lives at MODULE scope, not inside
+     the view: any re-render (a route change, a store notification, an
+     auth refresh) rebuilds the view, and closure-held state was lost
+     with it — which made the controls look dead. */
+  var notetakerState = {
+    results: null,   /* the analysis waiting for review */
+    text: '',        /* pasted transcript text */
+    title: '',       /* meeting title typed by the user */
+    status: '',      /* last status message */
+    busy: false
+  };
+
   function notetakerCard() {
     var body = el('div.stack');
-    var status = el('div.s.faint', { text: 'Upload a transcript file, or paste the transcript below.' });
+    var status = el('div.s.faint', { text: notetakerState.status || 'Upload a transcript file, or paste the transcript below.' });
     var results = null;
-    var working = false;
 
     var fileInput = el('input.input', {
       type: 'file',
       accept: 'audio/*,video/*,.txt,.vtt,.md,.srt,.json,text/plain',
       style: { display: 'block', marginBottom: '10px' }
     });
-    var paste = el('textarea.textarea', { rows: 4, placeholder: 'Paste a transcript here (speaker: text, one turn per line).' });
-    var title = el('input.input', { type: 'text', placeholder: 'Meeting title (optional)' });
+    var paste = el('textarea.textarea', { rows: 4, value: notetakerState.text, placeholder: 'Paste a transcript here (speaker: text, one turn per line).' });
+    var title = el('input.input', { type: 'text', value: notetakerState.title, placeholder: 'Meeting title (optional)' });
+
+    paste.addEventListener('input', function () { notetakerState.text = paste.value; });
+    title.addEventListener('input', function () { notetakerState.title = title.value; });
 
     function setStatus(text, kind) {
+      notetakerState.status = text;
       status.textContent = text;
       status.className = 's' + (kind ? ' ' + kind : ' faint');
     }
 
     function analyseText(text, sourceLabel) {
       var analysis = window.EnginesNotetaker.analyse(text, {});
-      results = {
+      notetakerState.results = {
         analysis: analysis,
         transcriptText: text,
         sourceLabel: sourceLabel,
         title: title.value.trim()
       };
       renderResults();
+      /* Ask the server for a model-based analysis. When no model is
+         configured the deterministic rules result stands on its own -
+         the user is told which one they are looking at. */
+      setStatus('Analysis ready — refining with the AI model…', 'faint');
+      window.EnginesNotetaker.analyseRemote(text).then(function (ai) {
+        if (!ai) {
+          setStatus('Analysis ready (deterministic rules — no AI model is configured for this deployment).', 'faint');
+          return;
+        }
+        var st = notetakerState.results;
+        if (!st) return;
+        st.ai = ai;
+        st.analysis.summary = ai.summary || st.analysis.summary;
+        st.analysis.decisions = ai.decisions && ai.decisions.length ? ai.decisions : st.analysis.decisions;
+        st.analysis.actionItems = ai.actionItems && ai.actionItems.length ? ai.actionItems : st.analysis.actionItems;
+        st.analysis.followUps = ai.followUps && ai.followUps.length ? ai.followUps : st.analysis.followUps;
+        st.analysis.extraction = 'model';
+        setStatus('Analysis ready (AI-generated — review every item before saving).', 'faint');
+        renderResults();
+      });
     }
 
     function renderResults() {
+      var results = notetakerState.results;
+      if (!results) return;
       body.appendChild(el('div.card', [
         el('div.card-head', [
           el('h2', { text: 'Review before saving' }),
-          el('span.hint', { text: 'Extracted with deterministic rules — edit anything' })
+          el('span.hint', {
+            text: results.analysis.extraction === 'model'
+              ? 'AI-generated from the transcript — edit anything'
+              : 'Extracted with deterministic rules — edit anything'
+          })
         ]),
         el('div.card-pad.stack', [
           el('div.field', [
@@ -241,7 +283,8 @@
           el('div.actions', [
             el('button.btn.btn-primary', {
               type: 'button', text: 'Save to my meetings', onclick: function () {
-                if (!results) return;
+                var results = notetakerState.results;
+                if (!results) { window.UI.toast('Nothing to save yet', 'err'); return; }
                 var mt = window.EnginesNotetaker.buildMeeting({
                   analysis: results.analysis,
                   title: results.title || 'Meeting recording',
@@ -266,13 +309,17 @@
                   created++;
                 });
                 window.UI.toast('Meeting saved' + (created ? ' — ' + created + ' action item(s) added' : ''), 'ok');
-                results = null;
+                notetakerState.results = null;
+                notetakerState.text = '';
+                notetakerState.title = '';
                 window.App.go('#/meetings/' + saved.id);
               }
             }),
             el('button.btn.btn-ghost', {
               type: 'button', text: 'Discard', onclick: function () {
-                results = null;
+                notetakerState.results = null;
+                notetakerState.text = '';
+                notetakerState.title = '';
                 setStatus('Discarded. Nothing was saved.', 'faint');
                 window.App.render();
               }
@@ -293,24 +340,28 @@
     function processFile() {
       var file = fileInput.files && fileInput.files[0];
       var pasted = paste.value.trim();
+      notetakerState.text = paste.value;
       if (!file && !pasted) {
         setStatus('Choose a file or paste a transcript first.', 'faint');
         return;
       }
-      if (working) return;
+      if (notetakerState.busy) return;
       if (file) {
         var v = window.EnginesNotetaker.validateFile(file);
         if (!v.ok) { setStatus(v.error, 'faint'); return; }
-        working = true;
+        notetakerState.busy = true;
         setStatus('Reading ' + v.name + '…', 'faint');
         window.EnginesNotetaker.transcribe(file).then(function (res) {
-          working = false;
+          notetakerState.busy = false;
           if (!res.ok) {
             setStatus(res.error, 'faint');
             return;
           }
           setStatus('Transcribed ' + res.name + ' — extracting decisions, actions and deadlines…', 'faint');
           analyseText(res.text, 'Uploaded transcript: ' + res.name);
+        }, function (e) {
+          notetakerState.busy = false;
+          setStatus('The file could not be processed: ' + ((e && e.message) || 'unknown error'), 'faint');
         });
       } else {
         setStatus('Analysing the pasted transcript…', 'faint');
@@ -335,6 +386,11 @@
       ]),
       status
     ]));
+
+    /* A re-render (route change, store update, auth refresh) rebuilds
+       this card — restore the analysis that is waiting for review so
+       the user's work is never silently thrown away. */
+    if (notetakerState.results) renderResults();
 
     return el('div.card', [
       el('div.card-head', [
