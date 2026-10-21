@@ -106,6 +106,18 @@
   }
 
   /* ---------- Transcript editor ---------- */
+  /* The speaker label for a turn the user adds is THEIR OWN name —
+     never the demo persona's. */
+  function speakerName() {
+    try {
+      if (window.Identity && window.Identity.firstName) {
+        var f = window.Identity.firstName();
+        if (f) return f.toUpperCase();
+      }
+    } catch (e) {}
+    return 'YOU';
+  }
+
   function openTranscript(meetingId) {
     var mt = window.Store.meeting(meetingId);
     if (!mt) return;
@@ -132,7 +144,7 @@
     body.appendChild(el('div.row', [
       el('button.btn.btn-secondary', {
         type: 'button', text: '+ Add turn', onclick: function () {
-          mt.transcript.push({ spk: 'TEMITOPE', text: '' });
+          mt.transcript.push({ spk: speakerName(), text: '' });
           m.close(); openTranscript(meetingId);
         }
       })
@@ -155,6 +167,184 @@
     });
   }
 
+  /* ---------- AI notetaker ----------
+     Upload a transcript file or paste a transcript, let the rules
+     engine extract what matters, review and edit the result, then
+     save it into the signed-in account's own meetings. Nothing is
+     saved until the user presses Save, and a recording is never
+     "transcribed" without a provider — the engine says so instead. */
+  function notetakerCard() {
+    var body = el('div.stack');
+    var status = el('div.s.faint', { text: 'Upload a transcript file, or paste the transcript below.' });
+    var results = null;
+    var working = false;
+
+    var fileInput = el('input.input', {
+      type: 'file',
+      accept: 'audio/*,video/*,.txt,.vtt,.md,.srt,.json,text/plain',
+      style: { display: 'block', marginBottom: '10px' }
+    });
+    var paste = el('textarea.textarea', { rows: 4, placeholder: 'Paste a transcript here (speaker: text, one turn per line).' });
+    var title = el('input.input', { type: 'text', placeholder: 'Meeting title (optional)' });
+
+    function setStatus(text, kind) {
+      status.textContent = text;
+      status.className = 's' + (kind ? ' ' + kind : ' faint');
+    }
+
+    function analyseText(text, sourceLabel) {
+      var analysis = window.EnginesNotetaker.analyse(text, {});
+      results = {
+        analysis: analysis,
+        transcriptText: text,
+        sourceLabel: sourceLabel,
+        title: title.value.trim()
+      };
+      renderResults();
+    }
+
+    function renderResults() {
+      body.appendChild(el('div.card', [
+        el('div.card-head', [
+          el('h2', { text: 'Review before saving' }),
+          el('span.hint', { text: 'Extracted with deterministic rules — edit anything' })
+        ]),
+        el('div.card-pad.stack', [
+          el('div.field', [
+            el('label', { text: 'Title' }),
+            (function () {
+              var t = el('input.input', { type: 'text', value: results.title || '' });
+              t.addEventListener('input', function () { results.title = t.value; });
+              return t;
+            })()
+          ]),
+          el('div.field', [
+            el('label', { text: 'Summary' }),
+            (function () {
+              var s = el('textarea.textarea', { rows: 3, value: results.analysis.summary });
+              s.addEventListener('input', function () { results.analysis.summary = s.value; });
+              return s;
+            })()
+          ]),
+          listField('Decisions', results.analysis.decisions, 'decisions'),
+          listField('Action items', results.analysis.actionItems, 'actionItems'),
+          listField('Follow-ups', results.analysis.followUps, 'followUps'),
+          listField('Deadlines', results.analysis.deadlines.map(function (d) { return d.evidence || d.phrase; }), 'deadlines'),
+          el('div.field', [
+            el('label', { text: 'Commitments detected' }),
+            results.analysis.commitments.length
+              ? el('ul.tidy', results.analysis.commitments.map(function (k) {
+                  return el('li', { text: (k.description || '') + (k.dueDate ? ' (due ' + k.dueDate + ')' : '') });
+                }))
+              : el('div.s.faint', { text: 'No commitments detected.' })
+          ]),
+          el('div.actions', [
+            el('button.btn.btn-primary', {
+              type: 'button', text: 'Save to my meetings', onclick: function () {
+                if (!results) return;
+                var mt = window.EnginesNotetaker.buildMeeting({
+                  analysis: results.analysis,
+                  title: results.title || 'Meeting recording',
+                  source: results.sourceLabel,
+                  transcript: window.EnginesNotetaker.sentences(results.transcriptText).map(function (line) {
+                    return { spk: 'Transcript', text: line };
+                  })
+                });
+                var saved = window.Store.mut.addUserMeeting(mt);
+                if (!saved) { window.UI.toast('Could not save the meeting', 'err'); return; }
+                /* Save the action items as real tasks in the same
+                   account — each one is a normal task the user can
+                   edit, complete or delete. */
+                var created = 0;
+                results.analysis.actionItems.forEach(function (line) {
+                  window.Store.mut.createTask({
+                    title: line.slice(0, 120),
+                    status: 'Inbox',
+                    source: { type: 'meeting', ref: saved.id },
+                    priority: 'medium'
+                  });
+                  created++;
+                });
+                window.UI.toast('Meeting saved' + (created ? ' — ' + created + ' action item(s) added' : ''), 'ok');
+                results = null;
+                window.App.go('#/meetings/' + saved.id);
+              }
+            }),
+            el('button.btn.btn-ghost', {
+              type: 'button', text: 'Discard', onclick: function () {
+                results = null;
+                setStatus('Discarded. Nothing was saved.', 'faint');
+                window.App.render();
+              }
+            })
+          ])
+        ])
+      ]));
+    }
+
+    function listField(label, items, key) {
+      var ta = el('textarea.textarea', { rows: Math.max(2, items.length), value: items.join('\n') });
+      ta.addEventListener('input', function () {
+        results.analysis[key] = ta.value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+      });
+      return el('div.field', [el('label', { text: label }), ta]);
+    }
+
+    function processFile() {
+      var file = fileInput.files && fileInput.files[0];
+      var pasted = paste.value.trim();
+      if (!file && !pasted) {
+        setStatus('Choose a file or paste a transcript first.', 'faint');
+        return;
+      }
+      if (working) return;
+      if (file) {
+        var v = window.EnginesNotetaker.validateFile(file);
+        if (!v.ok) { setStatus(v.error, 'faint'); return; }
+        working = true;
+        setStatus('Reading ' + v.name + '…', 'faint');
+        window.EnginesNotetaker.transcribe(file).then(function (res) {
+          working = false;
+          if (!res.ok) {
+            setStatus(res.error, 'faint');
+            return;
+          }
+          setStatus('Transcribed ' + res.name + ' — extracting decisions, actions and deadlines…', 'faint');
+          analyseText(res.text, 'Uploaded transcript: ' + res.name);
+        });
+      } else {
+        setStatus('Analysing the pasted transcript…', 'faint');
+        analyseText(pasted, 'Pasted transcript');
+      }
+    }
+
+    body.appendChild(el('div.stack', [
+      el('div.field', [
+        el('label', { text: 'Meeting recording or transcript file' }),
+        fileInput,
+        el('div.s.faint', {
+          text: 'Audio and video are accepted, but this deployment has no transcription ' +
+                'provider — upload a transcript file (.txt, .vtt, .md) or paste the ' +
+                'transcript to get a summary, decisions, action items and deadlines.'
+        })
+      ]),
+      el('div.field', [el('label', { text: 'Title' }), title]),
+      el('div.field', [el('label', { text: 'Or paste a transcript' }), paste]),
+      el('div.actions', [
+        el('button.btn.btn-primary', { type: 'button', text: 'Analyse', onclick: processFile })
+      ]),
+      status
+    ]));
+
+    return el('div.card', [
+      el('div.card-head', [
+        el('h2', { text: 'AI notetaker' }),
+        el('span.hint', { text: 'Upload → transcribe → understand → organise → act' })
+      ]),
+      el('div.card-pad', body)
+    ]);
+  }
+
   /* ---------- Meeting list + detail ---------- */
   function view(root) {
     var route = window.App.route();
@@ -166,6 +356,7 @@
     var upcoming = window.EnginesTasks.eventsToday().concat(window.EnginesTasks.eventsTomorrow());
 
     root.appendChild(window.UI.page('Meetings', 'AI reads every meeting, transcript and commitment.', el('div.stack', [
+      notetakerCard(),
       el('div.card', [
         el('div.card-head', [
           el('h2', { text: 'Upcoming' }),
@@ -249,6 +440,24 @@
                 ? el('ul.tidy', m.decisions.map(function (d) { return el('li', { text: d }); }))
                 : el('div.s.faint', { text: 'No decisions recorded.' }))
             ]),
+            (m.actionItems && m.actionItems.length) ? el('div.card', [
+              el('div.card-head', [el('h2', { text: 'Action items' })]),
+              el('div.card-pad', el('ul.tidy', m.actionItems.map(function (a) {
+                return el('li', { text: a });
+              })))
+            ]) : null,
+            (m.deadlines && m.deadlines.length) ? el('div.card', [
+              el('div.card-head', [el('h2', { text: 'Deadlines' })]),
+              el('div.card-pad', el('ul.tidy', m.deadlines.map(function (d) {
+                return el('li', { text: (d.phrase || '') + (d.evidence ? ' — ' + d.evidence : '') });
+              })))
+            ]) : null,
+            (m.followUps && m.followUps.length) ? el('div.card', [
+              el('div.card-head', [el('h2', { text: 'Follow-ups' })]),
+              el('div.card-pad', el('ul.tidy', m.followUps.map(function (f) {
+                return el('li', { text: f });
+              })))
+            ]) : null,
             el('div.card', [
               el('div.card-head', [
                 el('h2', { text: 'Commitments extracted' }),

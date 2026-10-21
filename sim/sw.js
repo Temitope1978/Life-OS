@@ -3,7 +3,7 @@
    API responses, auth endpoints, private data, credentials, or
    tokens. HTML is network-first to avoid stale versions. */
 
-const CACHE_NAME = 'lifeos-shell-v4';
+const CACHE_NAME = 'lifeos-shell-v6';
 
 const STATIC_ASSETS = [
   './',
@@ -16,6 +16,7 @@ const STATIC_ASSETS = [
   './assets/js/core/demo-auth.js',
   './assets/js/core/details.js',
   './assets/js/core/identity.js',
+  './assets/js/core/response-templates.js',
   './assets/js/core/oauth.js',
   './assets/js/core/providers.js',
   './assets/js/core/seam.js',
@@ -28,6 +29,7 @@ const STATIC_ASSETS = [
   './assets/js/engines/followup.js',
   './assets/js/engines/forgetting.js',
   './assets/js/engines/mail.js',
+  './assets/js/engines/notetaker.js',
   './assets/js/engines/priority.js',
   './assets/js/engines/search.js',
   './assets/js/engines/tasks.js',
@@ -44,7 +46,9 @@ const STATIC_ASSETS = [
   './assets/js/ui/views/meetings.js',
   './assets/js/ui/views/search.js',
   './assets/js/ui/views/settings.js',
-  './assets/images/life-os-logo.png'
+  './assets/images/life-os-logo.png',
+  './assets/images/icon-192.png',
+  './assets/images/icon-512.png'
 ];
 
 self.addEventListener('install', function (event) {
