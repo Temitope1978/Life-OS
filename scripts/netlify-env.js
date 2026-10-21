@@ -49,12 +49,30 @@ function fail(message) {
 /* Single-quoted JS string literal encoding. Values are expected to be
    URLs and key tokens, so anything outside a safe allowlist fails the
    build instead of emitting escaped (and possibly broken) output. */
+/* Values that are masked/redacted in the Netlify dashboard (e.g.
+   "****************eco") or otherwise truncated are NOT valid
+   configuration. Shipping them produced a site whose Supabase client
+   could not be created - a blank page for the user. They are rejected
+   here so the BUILD fails loudly instead. */
+function looksMasked(value) {
+  return /\*/.test(value);
+}
+
 function encodeValue(name, value) {
   if (typeof value !== 'string' || value.length === 0) {
     fail('required environment variable ' + name + ' is missing or empty.');
   }
   if (/[\u0000-\u001f\u007f'\\]/.test(value)) {
     fail(name + ' contains a character that cannot appear in env.js.');
+  }
+  if (looksMasked(value)) {
+    fail(name + ' looks masked or redacted (it contains "*"). Set the real value in the deployment environment.');
+  }
+  if (name === 'SUPABASE_URL') {
+    var ok = /^https:\/\/[^\s/?#]+\.[^\s/?#]+/.test(value);
+    if (!ok) {
+      fail('SUPABASE_URL is not a valid https URL (it must start with https:// and name a host).');
+    }
   }
   return "'" + value + "'";
 }
