@@ -311,7 +311,22 @@
           subscribe();
           notify();
         });
-      }).catch(function () { clearCache(); });
+      }).catch(function () {
+        /* getUser() failed (network error, expired token). Try to restore
+           from the session's user data instead of clearing everything. */
+        var user = (s && s.user) || null;
+        if (!user) { clearCache(); return; }
+        cache.session = normalizeSession(s);
+        cachedAccessToken = (s && s.access_token) || null;
+        var userId = user.id;
+        return fetchProfile(userId).then(function (profile) {
+          cache.profile = profile;
+          cache.user = normalizeUser(user, s, profile);
+          cache.ready = true;
+          subscribe();
+          notify();
+        });
+      });
     }
 
     /* ---------- Session adapter contract ---------- */

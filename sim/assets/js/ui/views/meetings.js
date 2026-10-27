@@ -220,6 +220,13 @@
       /* Ask the server for a model-based analysis. When no model is
          configured the deterministic rules result stands on its own -
          the user is told which one they are looking at. */
+      /* Guard: if there is no transcript text */
+      if (!text || !String(text).trim()) {
+        setStatus('Nothing to analyse - enter a transcript or upload a file first.', 'faint');
+        notetakerState.results = null;
+        renderResults();
+        return;
+      }
       setStatus('Analysis ready — refining with the AI model…', 'faint');
       window.EnginesNotetaker.analyseRemote(text).then(function (ai) {
         if (!ai) {
