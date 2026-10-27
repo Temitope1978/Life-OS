@@ -209,7 +209,26 @@
     }
 
     function analyseText(text, sourceLabel) {
-      var analysis = window.EnginesNotetaker.analyse(text, {});
+      /* Guard: if there is no transcript text, show a clear message
+         and return early so the user is not left with a blank screen. */
+      if (!text || !String(text).trim()) {
+        setStatus('Nothing to analyse - enter a transcript or upload a file first.', 'faint');
+        notetakerState.results = null;
+        renderResults();
+        return;
+      }
+      /* Deterministic rule-based analysis runs in the browser. Wrap it
+         in try/catch so any unexpected error is surfaced instead of
+         leaving the user with a blank screen. */
+      var analysis;
+      try {
+        analysis = window.EnginesNotetaker.analyse(text, {});
+      } catch (e) {
+        setStatus('Analysis failed: ' + ((e && e.message) || 'unknown error'), 'faint');
+        notetakerState.results = null;
+        renderResults();
+        return;
+      }
       notetakerState.results = {
         analysis: analysis,
         transcriptText: text,
@@ -219,14 +238,8 @@
       renderResults();
       /* Ask the server for a model-based analysis. When no model is
          configured the deterministic rules result stands on its own -
-         the user is told which one they are looking at. */
-      /* Guard: if there is no transcript text */
-      if (!text || !String(text).trim()) {
-        setStatus('Nothing to analyse - enter a transcript or upload a file first.', 'faint');
-        notetakerState.results = null;
-        renderResults();
-        return;
-      }
+         the user is told which one they are looking at. The results
+         already rendered above are never removed by a failed AI call. */
       setStatus('Analysis ready — refining with the AI model…', 'faint');
       window.EnginesNotetaker.analyseRemote(text).then(function (ai) {
         if (!ai) {
@@ -243,6 +256,10 @@
         st.analysis.extraction = 'model';
         setStatus('Analysis ready (AI-generated — review every item before saving).', 'faint');
         renderResults();
+      }, function () {
+        /* Network or other failure calling the backend: deterministic
+           rules results remain visible. The user is told explicitly. */
+        setStatus('Analysis ready (deterministic rules — the AI model could not be reached).', 'faint');
       });
     }
 
