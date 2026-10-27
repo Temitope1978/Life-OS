@@ -482,6 +482,50 @@ test('Live mode: Misconfigured adapter does not fall back to demo', function () 
   assert.strictEqual(adapter.currentUser(), null, 'Misconfigured adapter must return null user');
 });
 
+/* ---------- Critical: No silent demo fallback ---------- */
+
+test('Live mode with missing config: bootstrap fails closed, does not activate DemoAuth', function () {
+  env = { LIFEOS_MODE: 'live' }; // No SUPABASE_URL or SUPABASE_ANON_KEY
+  // bootstrap() should return a promise that resolves with misconfigured status
+  // and the adapter should be MisconfiguredAdapter, NOT DemoAuth
+  return window.SupabaseAuth.bootstrap().then(function (result) {
+    var adapter = window.Session.getAdapter();
+    assert.strictEqual(adapter.id, 'misconfigured', 'Adapter should be misconfigured, not demo, got: ' + adapter.id);
+    assert.strictEqual(adapter.misconfigured, true, 'Adapter should be marked misconfigured');
+    assert.strictEqual(adapter.isAuthenticated(), false, 'Misconfigured adapter must not be authenticated');
+    assert.strictEqual(result.status, 'misconfigured', 'Bootstrap result should be misconfigured');
+  });
+});
+
+test('Live mode with missing config: render() shows configuration error, not demo data', function () {
+  env = { LIFEOS_MODE: 'live' };
+  var adapter = window.SupabaseAuth.MisconfiguredAdapter;
+  assert.strictEqual(adapter.requireAuth('/control'), false, 'Protected routes must be blocked when misconfigured');
+  assert.strictEqual(adapter.requireAuth('/signin'), true, 'Public routes must stay open when misconfigured');
+});
+
+test('Config.get returns null for missing LIFEOS_MODE (not silently live)', function () {
+  env = {};
+  assert.strictEqual(window.Config.get('LIFEOS_MODE'), null, 'Missing LIFEOS_MODE must return null');
+  assert.strictEqual(window.Config.isEmpty(), true, 'Empty config must report isEmpty');
+});
+
+/* ---------- Build script validation (netlify-env.js) ---------- */
+
+test('Build script: hardcodes LIFEOS_MODE as live', function () {
+  var fs = require('fs');
+  var c = fs.readFileSync('scripts/netlify-env.js', 'utf8');
+  assert.ok(c.includes("LIFEOS_MODE: 'live'"), 'Build script must hardcode LIFEOS_MODE as live');
+});
+
+test('Build script: rejects masked or truncated values', function () {
+  var fs = require('fs');
+  var c = fs.readFileSync('scripts/netlify-env.js', 'utf8');
+  assert.ok(c.includes('looksMasked'), 'Build script must have masked-value detection');
+  assert.ok(c.includes('required environment variable'), 'Build script must fail on missing vars');
+  assert.ok(c.includes('new Function(content)'), 'Build script must syntax-check output');
+});
+
 /* ---------- Run all tests ---------- */
 
 console.log('');
